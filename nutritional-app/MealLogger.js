@@ -51,10 +51,6 @@ const MealLogger = ({ session }) => {
   const [customCarbs, setCustomCarbs] = useState('');
   const [customFat, setCustomFat] = useState('');
   const [isSavingCustomFood, setIsSavingCustomFood] = useState(false);
-  
-  const [mfdsPageNo, setMfdsPageNo] = useState(1);
-  const [mfdsHasMore, setMfdsHasMore] = useState(false);
-  const [isSearchingMore, setIsSearchingMore] = useState(false);
 
   // --- 함수들 (수정 없음) ---
 
@@ -140,47 +136,26 @@ const MealLogger = ({ session }) => {
   };
   const isToday = getFormattedDate(selectedDate) === getFormattedDate(new Date());
 
+  // --- ⭐️ [수정] 2. 음식 검색 함수 (데이터 경로 수정) ---
   const handleSearchFood = async (query) => {
     setSearchQuery(query);
     if (query.length < 2) {
       setSearchResults([]);
-      setMfdsHasMore(false);
       return;
     }
     setIsSearching(true);
-    setMfdsPageNo(1);
 
+    // ⭐️ 사용자님의 API 키를 적용했습니다.
     const MFDS_API_KEY = 'cd9aec01b84399f9af32a83bd4a8ca8284be3e82202c1bd8c56ea667057325f6'; 
+    
     const decodedServiceKey = decodeURIComponent(MFDS_API_KEY);
     const mfdsUrl = `https://apis.data.go.kr/1471000/FoodNtrCpntDbInfo02/getFoodNtrCpntDbInq02`;
 
-    let customData = [];
-    let mfdsData = [];
+    let customResult = { data: [], error: null };
 
     try {
-      // 1. '나만의 음식' 검색
-      try {
-        const { data: customResult, error: customError } = await supabase
-          .from('user_custom_foods')
-          .select('*')
-          .eq('user_id', session.user.id)
-          .ilike('food_name', `%${query}%`)
-          .limit(5);
-
-        if (customError) throw customError; 
-        
-        customData = (customResult || []).map(item => ({
-          ...item,
-          maker_name: '나만의 음식'
-        }));
-        
-      } catch (supaError) {
-        console.error("--- Supabase 검색 오류 ---", supaError);
-      }
-
-      // 2. 식약처 API 검색
-      try {
-        const mfdsResponse = await axios.get(mfdsUrl, {
+      const [mfdsResponse, _customResult] = await Promise.all([
+        axios.get(mfdsUrl, {
           params: {
             serviceKey: decodedServiceKey,
             pageNo: 1,
@@ -188,74 +163,28 @@ const MealLogger = ({ session }) => {
             type: 'json',
             FOOD_NM_KR: query
           }
-        });
-        
-        const header = mfdsResponse.data?.header;
-        if (header && header.resultCode === '00') {
-          if (mfdsResponse.data.body && mfdsResponse.data.body.items) {
-            const items = [].concat(mfdsResponse.data.body.items.item || []);
-            mfdsData = items.map(item => ({
-              id: `mfds-${item.FOOD_CD}`,
-              food_name: item.FOOD_NM_KR,
-              maker_name: item.MAKER_NM || '',
-              calories: parseFloat(item.AMT_NUM1) || 0,
-              protein: parseFloat(item.AMT_NUM3) || 0,
-              fat: parseFloat(item.AMT_NUM4) || 0,
-              carbs: parseFloat(item.AMT_NUM6) || 0,
-            }));
-            const totalCount = parseInt(mfdsResponse.data.body.totalCount) || 0;
-            setMfdsHasMore((1 * 20) < totalCount);
-          } else {
-            setMfdsHasMore(false);
-          }
-        } else {
-          setMfdsHasMore(false);
-          console.warn('식약처 API가 오류 또는 "결과 없음"을 반환했습니다:', header?.resultMsg);
-        }
-      } catch (apiError) {
-        console.error("--- 식약처 API 네트워크/Axios 오류 ---", apiError.message);
-        setMfdsHasMore(false);
-      }
+        }),
+        supabase
+          .from('user_custom_foods')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .ilike('food_name', `%${query}%`)
+          .limit(5)
+      ]);
       
-      // 3. '나만의 음식' + '식약처 음식' 결과 합치기
-      const combinedResults = [...customData, ...mfdsData];
-      setSearchResults(combinedResults);
-
-    } catch (error) {
-      console.error("--- 전체 검색 로직 오류 ---", error);
-      Alert.alert('검색 오류', '데이터를 불러오는 중 오류가 발생했습니다.');
-      setSearchResults([]);
-    } finally {
-      setIsSearching(false);
-    }
-  };
-  
-  const handleLoadMore = async () => {
-    if (isSearchingMore || !mfdsHasMore) return;
-    setIsSearchingMore(true);
-    const nextPage = mfdsPageNo + 1;
-
-    const MFDS_API_KEY = 'cd9aec01b84399f9af32a83bd4a8ca8284be3e82202c1bd8c56ea667057325f6'; 
-    const decodedServiceKey = decodeURIComponent(MFDS_API_KEY);
-    const mfdsUrl = `https://apis.data.go.kr/1471000/FoodNtrCpntDbInfo02/getFoodNtrCpntDbInq02`;
-
-    try {
-      const mfdsResponse = await axios.get(mfdsUrl, {
-        params: {
-          serviceKey: decodedServiceKey,
-          pageNo: nextPage,
-          numOfRows: 20,
-          type: 'json',
-          FOOD_NM_KR: searchQuery
-        }
-      });
+      customResult = _customResult;
       
       const header = mfdsResponse.data?.header;
       
       if (header && header.resultCode === '00') {
+        let mfdsData = [];
+        // ⭐️ [수정] 4. 'body.items' (배열)가 존재하는지 확인
         if (mfdsResponse.data.body && mfdsResponse.data.body.items) {
-          const items = [].concat(mfdsResponse.data.body.items.item || []);
-          const newMfdsData = items.map(item => ({
+          
+          // ⭐️ [수정] 5. 'items'는 이미 배열이므로 바로 사용합니다.
+          const items = mfdsResponse.data.body.items; 
+          
+          mfdsData = items.map(item => ({
             id: `mfds-${item.FOOD_CD}`,
             food_name: item.FOOD_NM_KR,
             maker_name: item.MAKER_NM || '',
@@ -264,29 +193,49 @@ const MealLogger = ({ session }) => {
             fat: parseFloat(item.AMT_NUM4) || 0,
             carbs: parseFloat(item.AMT_NUM6) || 0,
           }));
-          
-          setSearchResults(prevResults => [...prevResults, ...newMfdsData]);
-          setMfdsPageNo(nextPage);
-
-          const totalCount = parseInt(mfdsResponse.data.body.totalCount) || 0;
-          setMfdsHasMore((nextPage * 20) < totalCount);
-        } else {
-          setMfdsHasMore(false);
         }
+        
+        const customData = (customResult.data || []).map(item => ({
+          ...item,
+          maker_name: '나만의 음식'
+        }));
+        
+        const combinedResults = [...customData, ...mfdsData];
+        setSearchResults(combinedResults);
+
       } else {
-        setMfdsHasMore(false);
+        console.warn('식약처 API가 오류 또는 "결과 없음"을 반환했습니다:', header?.resultMsg);
+        const customData = (customResult.data || []).map(item => ({
+          ...item,
+          maker_name: '나만의 음식'
+        }));
+        setSearchResults(customData);
       }
+
     } catch (error) {
-      console.error("더 불러오기 오류:", error);
-      setMfdsHasMore(false);
+      console.error("--- API 네트워크/Axios 오류 ---");
+      if (error.response) {
+        console.error("데이터:", JSON.stringify(error.response.data, null, 2));
+        console.error("상태 코드:", error.response.status);
+      } else if (error.request) {
+        console.error("요청:", error.request);
+      } else {
+        console.error('오류 메시지:', error.message);
+      }
+      console.error("--- --------------------- ---");
+      Alert.alert('검색 오류', 'API 서버 연결에 실패했습니다.');
+      const customData = (customResult.data || []).map(item => ({
+        ...item,
+        maker_name: '나만의 음식'
+      }));
+      setSearchResults(customData);
     } finally {
-      setIsSearchingMore(false);
+      setIsSearching(false);
     }
   };
 
 
   const handleSelectFood = (food) => {
-    // ... (동일)
     setFoodName(food.food_name);
     setCalories(food.calories.toString());
     setProtein(food.protein.toString());
@@ -338,13 +287,11 @@ const MealLogger = ({ session }) => {
   const totalProtein = logs.reduce((sum, log) => sum + (log.protein || 0), 0);
   const totalCarbs = logs.reduce((sum, log) => sum + (log.carbs || 0), 0);
   const totalFat = logs.reduce((sum, log) => sum + (log.fat || 0), 0);
-
-  // --- 프로그래스 바 계산 ---
-  const goalCalories = profile?.goal_calories || 1;
-  let progressPercent = (totalCalories / goalCalories) * 100;
-  const progressBarColor = progressPercent > 100 ? '#F44336' : '#007bff';
-  progressPercent = Math.min(progressPercent, 100);
-
+  const goalCaloriesValue = parseFloat(profile?.goal_calories) || 1; // 0으로 나누는 것 방지
+  let progressPercent = (totalCalories / goalCaloriesValue) * 100;
+  const progressBarColor = progressPercent > 100 ? '#F44336' : '#007bff'; // 100% 넘으면 빨간색
+  progressPercent = Math.min(progressPercent, 100); // 시각적 표시는 100%에서 멈춤
+  
   if (loading && !profile) {
     return <ActivityIndicator size="large" style={styles.loading} />;
   }
@@ -368,8 +315,10 @@ const MealLogger = ({ session }) => {
       );
     }
     return (
+      // ⭐️ [수정] Fragment(<>)를 <View style={{ flex: 1 }}>로 변경
       <View style={{ flex: 1 }}>
         
+        {/* ⭐️ [신규] 헤더 영역 (제목 + 새 음식 추가 버튼) */}
         <View style={styles.modalHeaderContainer}>
           <Text style={styles.modalHeader}>음식 검색</Text>
           <Button title="➕ 새 음식" onPress={() => setModalMode('add')} />
@@ -384,7 +333,7 @@ const MealLogger = ({ session }) => {
         {isSearching && <ActivityIndicator />}
         
         <FlatList
-          style={{ flex: 1 }} 
+          style={{ flex: 1 }} // ⭐️ 이 스타일이 중요합니다!
           data={searchResults}
           keyExtractor={(item) => `${item.id}-${item.food_name}`}
           
@@ -411,13 +360,8 @@ const MealLogger = ({ session }) => {
               {!isSearching && searchQuery.length > 1 && (
                 <Text style={styles.emptyText}>검색 결과가 없습니다.</Text>
               )}
+              {/* '새 음식 추가하기' 버튼이 위로 이동했습니다. */}
             </View>
-          }
-          
-          onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
-          ListFooterComponent={
-            isSearchingMore ? <ActivityIndicator size="small" color="#0000ff" /> : null
           }
         />
         <Button title="닫기" onPress={() => setModalVisible(false)} />
@@ -457,7 +401,7 @@ const MealLogger = ({ session }) => {
         )}
         ListHeaderComponent={
           <>
-            {/* --- 1. 요약 및 날짜 이동 --- */}
+            {/* --- ⭐️ [수정] 2. 요약 카드 (프로그래스 바 추가) --- */}
             <View style={styles.summaryContainer}>
               <View style={styles.dateNavigator}>
                 <Button title="◀ 이전" onPress={handlePrevDay} />
@@ -478,7 +422,7 @@ const MealLogger = ({ session }) => {
                     (목표: {profile?.goal_calories || 0} kcal)
                   </Text>
                   
-                  {/* 프로그래스 바 */}
+                  {/* ⭐️ [신규] 3. 프로그래스 바 */}
                   <View style={styles.progressBarContainer}>
                     <View style={[
                       styles.progressBar,
@@ -498,7 +442,7 @@ const MealLogger = ({ session }) => {
               )}
             </View>
 
-            {/* --- ⭐️ [수정] 2. 식단 추가 폼 (주석 복원) --- */}
+            {/* --- ⭐️ [수정] 4. 식단 추가 폼 (주석 복원) --- */}
             <View style={styles.formContainer}>
               <View style={styles.formHeader}>
                 <Text style={styles.subHeader}>
@@ -591,7 +535,7 @@ const MealLogger = ({ session }) => {
   );
 };
 
-// --- 스타일 (동일) ---
+// --- ⭐️ [수정] 5. 스타일 시트 (프로그래스 바 스타일 추가) ---
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 15 },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
