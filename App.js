@@ -1,104 +1,54 @@
 // App.js
 
-import 'react-native-url-polyfill/auto';
+import 'react-native-url-polyfill/auto'; // Supabase를 위한 폴리필
 import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { supabase } from './supabaseClient';
-import AuthScreen from './AuthScreen';
-import NutritionCalculator from './NutritionCalculator';
-// ⭐️ [수정] MealLogger 대신 MainTabNavigator를 import
-import MainTabNavigator from './MainTabNavigator'; 
-import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
+import Auth from './Auth';
+import MainTabNavigator from './MainTabNavigator';
+
+// ⭐️ [신규] NavigationContainer import
+import { NavigationContainer } from '@react-navigation/native';
 
 export default function App() {
-  const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
-  const [profileExists, setProfileExists] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  // (checkProfile 함수는 수정 없이 동일)
-  const checkProfile = async (user) => {
-    try {
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-      
-      if (data) {
-        setProfileExists(true);
-      } else {
-        setProfileExists(false);
-      }
-      if (error && error.code !== 'PGRST116') throw error;
-    } catch (error) {
-      console.error('프로필 확인 중 오류:', error.message);
-      setProfileExists(false);
-    }
-  };
-
-  // (useEffect 함수는 수정 없이 동일)
   useEffect(() => {
-    setLoading(true);
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) {
-        await checkProfile(session.user);
-      }
       setLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        setLoading(true);
-        setSession(session);
-        if (session) {
-          await checkProfile(session.user);
-        } else {
-          setProfileExists(false); 
-        }
-        setLoading(false);
-      }
-    );
-    return () => subscription?.unsubscribe();
-  }, []);
 
-  
-  // --- 렌더링 로직 (수정) ---
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (_event === 'SIGNED_OUT') {
+        setLoading(false); // 로그아웃 시 로딩 상태 해제
+      }
+    });
+  }, []);
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#007bff" />
       </View>
     );
   }
 
-  // 2. 비로그인 상태
-  if (!session) {
-    return <AuthScreen />;
-  }
-
-  // 3. ⭐️ 로그인 O, 프로필 X (수정 없음)
-  if (session && !profileExists) {
-    return (
-      <NutritionCalculator 
-        session={session} 
-        onProfileCreated={() => setProfileExists(true)} 
-      />
-    );
-  }
-
-  // 4. ⭐️ [수정] 로그인 O, 프로필 O
-  if (session && profileExists) {
-    // MealLogger 대신 MainTabNavigator를 렌더링합니다.
-    return <MainTabNavigator session={session} />;
-  }
-
-  return <AuthScreen />;
+  return (
+    // ⭐️ [수정] MainTabNavigator를 NavigationContainer로 감싸기
+    <NavigationContainer>
+      {session && session.user ? (
+        <MainTabNavigator session={session} />
+      ) : (
+        <Auth />
+      )}
+    </NavigationContainer>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',

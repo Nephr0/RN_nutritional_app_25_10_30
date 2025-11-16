@@ -2,46 +2,48 @@
 
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { NavigationContainer } from '@react-navigation/native';
-// ⭐️ [수정] MealLogger를 import 합니다.
+import { Ionicons } from '@expo/vector-icons';
+
 import MealLogger from './MealLogger';
 import ProfileScreen from './ProfileScreen';
-// ⭐️ [수정] 임시용 Text, View, StyleSheet를 제거합니다.
+import StatisticsScreen from './StatisticsScreen'; // ⭐️ [신규] StatisticsScreen import
 
 const Tab = createBottomTabNavigator();
 
-// ⭐️ [수정] 임시 화면(PlaceholderScreen1)을 삭제합니다.
-
 const MainTabNavigator = ({ session }) => {
   return (
-    <NavigationContainer>
-      <Tab.Navigator
-        screenOptions={{
-          headerShown: false,
-          tabBarActiveTintColor: '#007bff',
-        }}
-      >
-        {/* 1. ⭐️ [수정] 식단 기록 탭 (실제 화면 연결) */}
-        <Tab.Screen 
-          name="Logger" 
-          options={{ title: '식단 기록' }}
-        >
-          {/* props를 전달하기 위해 함수 방식 사용 */}
-          {(props) => <MealLogger {...props} session={session} />}
-        </Tab.Screen>
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ focused, color, size }) => {
+          let iconName;
 
-        {/* 2. 프로필 탭 (수정 없음) */}
-        <Tab.Screen 
-          name="Profile" 
-          options={{ title: '프로필' }}
-        >
-          {(props) => <ProfileScreen {...props} session={session} />}
-        </Tab.Screen>
-      </Tab.Navigator>
-    </NavigationContainer>
+          if (route.name === '식단 기록') {
+            iconName = focused ? 'restaurant' : 'restaurant-outline';
+          } else if (route.name === '프로필') {
+            iconName = focused ? 'person' : 'person-outline';
+          } else if (route.name === '통계') { // ⭐️ [신규] 통계 탭 아이콘
+            iconName = focused ? 'stats-chart' : 'stats-chart-outline';
+          }
+
+          return <Ionicons name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: '#007bff', // 활성 탭 색상
+        tabBarInactiveTintColor: 'gray', // 비활성 탭 색상
+        headerShown: false, // 각 탭 화면에 헤더 표시 안함
+      })}
+    >
+      <Tab.Screen name="식단 기록" options={{ title: '식단 기록' }}>
+        {props => <MealLogger {...props} session={session} />}
+      </Tab.Screen>
+      <Tab.Screen name="프로필" options={{ title: '프로필' }}>
+        {props => <ProfileScreen {...props} session={session} />}
+      </Tab.Screen>
+      {/* ⭐️ [신규] 통계 탭 추가 */}
+      <Tab.Screen name="통계" options={{ title: '통계' }}>
+        {props => <StatisticsScreen {...props} session={session} />}
+      </Tab.Screen>
+    </Tab.Navigator>
   );
 };
-
-// ⭐️ [수정] 임시용 styles를 삭제합니다.
 
 export default MainTabNavigator;

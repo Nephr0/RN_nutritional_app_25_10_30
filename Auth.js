@@ -5,7 +5,7 @@ import { View, Text, TextInput, Button, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context'; 
 import { supabase } from './supabaseClient';
 
-const AuthScreen = () => {
+const Auth = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -94,4 +94,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default AuthScreen;
+export default Auth;

@@ -20,7 +20,7 @@ import { supabase } from './supabaseClient';
 import { Picker } from '@react-native-picker/picker';
 
 // 헬퍼 함수
-const getFormattedDate = (date) => {
+export const getFormattedDate = (date) => { // ⭐️ export 추가
   const year = date.getFullYear();
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
   const day = date.getDate().toString().padStart(2, '0');
