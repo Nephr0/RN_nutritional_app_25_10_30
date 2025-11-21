@@ -14,12 +14,27 @@ import {
   Modal,
   SafeAreaView,
   ScrollView,
+  Image,
 } from 'react-native';
 import axios from 'axios';
 import { supabase } from './supabaseClient';
 import { Picker } from '@react-native-picker/picker';
 import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+// ⭐️ [필수] 여기에 Google AI Studio에서 발급받은 키를 넣으세요
+const GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY';
+
+// 두 날짜 객체가 같은 날인지 확인하는 유틸리티 함수
+const isSameDay = (date1, date2) => {
+  return (
+    date1.getFullYear() === date2.getFullYear() &&
+    date1.getMonth() === date2.getMonth() &&
+    date1.getDate() === date2.getDate()
+  );
+};
 
 export const getFormattedDate = (date) => {
   const year = date.getFullYear();
@@ -42,11 +57,6 @@ const MealLogger = ({ session }) => {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  const [foodName, setFoodName] = useState('');
-  const [calories, setCalories] = useState('');
-  const [protein, setProtein] = useState('');
-  const [carbs, setCarbs] = useState('');
-  const [fat, setFat] = useState('');
   const [mealType, setMealType] = useState('breakfast');
   
   const [modalVisible, setModalVisible] = useState(false);
@@ -55,12 +65,6 @@ const MealLogger = ({ session }) => {
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   
-  const [customFoodId, setCustomFoodId] = useState(null);
-  const [customFoodName, setCustomFoodName] = useState('');
-  const [customCalories, setCustomCalories] = useState('');
-  const [customProtein, setCustomProtein] = useState('');
-  const [customCarbs, setCustomCarbs] = useState('');
-  const [customFat, setCustomFat] = useState('');
   const [isSavingCustomFood, setIsSavingCustomFood] = useState(false);
   const [myFoodsList, setMyFoodsList] = useState([]); 
   
@@ -72,12 +76,35 @@ const MealLogger = ({ session }) => {
   const [servingMultiplier, setServingMultiplier] = useState(1.0);
   const [favoritesList, setFavoritesList] = useState([]);
 
-  const [permission, requestPermission] = useCameraPermissions();
-  const [scanned, setScanned] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isEditingNutrients, setIsEditingNutrients] = useState(false);
+  const [aiSearchText, setAiSearchText] = useState('');
 
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const [adjustPurpose, setAdjustPurpose] = useState('log_meal');
+
+  const onChangeDate = (event, selected) => {
+    const currentDate = selected || selectedDate;
+    setShowDatePicker(false);
+    setSelectedDate(currentDate);
+  };
+  
   useEffect(() => {
     fetchData();
   }, [selectedDate]);
+
+  const formatDateMMDD = (date) => {
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    return `${month}.${day}`;
+  };
+  
+  const prevDateObj = new Date(selectedDate);
+  prevDateObj.setDate(selectedDate.getDate() - 1);
+
+  const nextDateObj = new Date(selectedDate);
+  nextDateObj.setDate(selectedDate.getDate() + 1);
 
   const fetchData = async () => {
     setLoading(true);
@@ -106,8 +133,7 @@ const MealLogger = ({ session }) => {
       setLoading(false);
     }
   };
-
-  const handleAddMeal = async () => { /* ... */ };
+  
   const handleDeleteMeal = async (logId) => {
     try {
       const { error } = await supabase.from('meal_logs').delete().eq('id', logId);
@@ -128,59 +154,157 @@ const MealLogger = ({ session }) => {
     nextDate.setDate(nextDate.getDate() + 1);
     setSelectedDate(nextDate);
   };
-  const isToday = getFormattedDate(selectedDate) === getFormattedDate(new Date());
 
-  const handleBarCodeScanned = async ({ type, data }) => {
-    setScanned(true);
+  const handleNutritionScan = async () => {
+    if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY') {
+      Alert.alert("설정 오류", "Gemini API 키를 설정해주세요.");
+      return;
+    }
+
+    Alert.alert("영양성분표 입력", "사진을 어떻게 가져올까요?", [
+      {
+        text: "카메라 촬영",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== 'granted') {
+            Alert.alert("권한 필요", "카메라 접근 권한이 필요합니다.");
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            base64: true, 
+            quality: 0.5,
+            allowsEditing: true,
+          });
+          if (!result.canceled) analyzeImageWithGemini(result.assets[0].base64);
+        }
+      },
+      {
+        text: "앨범에서 선택",
+        onPress: async () => {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status !== 'granted') {
+            Alert.alert("권한 필요", "사진첩 접근 권한이 필요합니다.");
+            return;
+          }
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            base64: true,
+            quality: 0.5,
+            allowsEditing: true,
+          });
+          if (!result.canceled) analyzeImageWithGemini(result.assets[0].base64);
+        }
+      },
+      { text: "취소", style: "cancel" }
+    ]);
+  };
+
+  const analyzeImageWithGemini = async (base64Image) => {
+    setIsAnalyzing(true);
     try {
-      const response = await axios.get(`https://world.openfoodfacts.org/api/v0/product/${data}.json`);
-      if (response.data.status === 1) {
-        const product = response.data.product;
-        const nutriments = product.nutriments;
-        const foodData = {
-          food_name: product.product_name || '스캔된 음식',
-          calories: nutriments['energy-kcal_100g'] || nutriments['energy-kcal'] || 0,
-          carbs: nutriments.carbohydrates_100g || nutriments.carbohydrates || 0,
-          protein: nutriments.proteins_100g || nutriments.proteins || 0,
-          fat: nutriments.fat_100g || nutriments.fat || 0,
-          serving_size: product.serving_size || '100g',
-          maker_name: product.brands || '바코드 스캔',
-        };
-        handleSelectFood(foodData); 
-      } else {
-        Alert.alert("검색 실패", "해당 바코드의 식품 정보를 찾을 수 없습니다. 직접 입력해주세요.", [
-            { text: '직접 입력하기', onPress: () => setModalMode('direct_input') },
-            { text: '다시 스캔', onPress: () => setScanned(false) }
-        ]);
-      }
+      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+
+      const prompt = `
+        Analyze this image of a nutrition facts label.
+        Extract the following information and return ONLY a JSON object:
+        - food_name: Name of the product (if not found, use "스캔된 제품")
+        - calories: Total calories (number only)
+        - carbs: Total carbohydrates in grams (number only)
+        - protein: Protein in grams (number only)
+        - fat: Total fat in grams (number only)
+        - serving_size: Serving size text (e.g., "100g", "1 pack")
+
+        Output format: {"food_name": "...", "calories": 0, "carbs": 0, "protein": 0, "fat": 0, "serving_size": "..."}
+        Do not include Markdown formatting like \`\`\`json. Just the raw JSON string.
+      `;
+
+      const imagePart = {
+        inlineData: {
+          data: base64Image,
+          mimeType: "image/jpeg",
+        },
+      };
+
+      const result = await model.generateContent([prompt, imagePart]);
+      const responseText = result.response.text();
+      
+      const cleanJson = responseText.replace(/```json|```/g, '').trim();
+      const parsedData = JSON.parse(cleanJson);
+
+      const aiFood = {
+        food_name: parsedData.food_name || '스캔된 제품',
+        calories: parsedData.calories || 0,
+        protein: parsedData.protein || 0,
+        carbs: parsedData.carbs || 0,
+        fat: parsedData.fat || 0,
+        serving_size: parsedData.serving_size || '',
+        maker_name: 'Gemini 분석',
+        image: `data:image/jpeg;base64,${base64Image}`, 
+      };
+
+      handleSelectFood(aiFood);
+
     } catch (error) {
-      Alert.alert("오류", "바코드 정보를 가져오는 데 실패했습니다.");
-      setScanned(false);
+      console.error("Gemini 분석 오류:", error);
+      Alert.alert("분석 실패", "영양성분표를 인식하지 못했습니다: " + error.message);
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
-  const openBarcodeScanner = async () => {
-    if (!permission) return;
-    if (!permission.granted) {
-      const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert("권한 필요", "카메라 권한이 필요합니다.");
-        return;
-      }
+  const analyzeTextWithGemini = async () => {
+    if (!aiSearchText.trim()) {
+      Alert.alert("입력 오류", "음식 내용을 입력해주세요.");
+      return;
     }
-    setScanned(false);
-    setModalMode('barcode');
-  };
 
-  const parseMfdsResponse = (data) => {
-    if (typeof data === 'string') return [];
-    const header = data?.header || data?.response?.header;
-    const body = data?.body || data?.response?.body;
-    if (header && header.resultCode === '00' && body && body.items) {
-      const itemsSource = Array.isArray(body.items) ? body.items : (body.items.item ? (Array.isArray(body.items.item) ? body.items.item : [body.items.item]) : [body.items]);
-      return [].concat(itemsSource).filter(i => i);
+    setIsAnalyzing(true);
+    try {
+      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+
+      const prompt = `
+        Analyze this food description: "${aiSearchText}".
+        Estimate the portion size in grams and nutritional content based on general data.
+        
+        Return ONLY a JSON object with the following keys:
+        - food_name: A concise name of the food (in Korean)
+        - calories: Total calories (number only)
+        - carbs: Total carbohydrates in grams (number only)
+        - protein: Protein in grams (number only)
+        - fat: Total fat in grams (number only)
+        - serving_size: The estimated serving size text (e.g., "2 slices (approx. 200g)")
+
+        Output format example: {"food_name": "콤비네이션 피자", "calories": 500, "carbs": 60, "protein": 20, "fat": 25, "serving_size": "2조각 (약 200g)"}
+        Do not include Markdown formatting like \`\`\`json. Just the raw JSON string.
+      `;
+
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
+      
+      const cleanJson = responseText.replace(/```json|```/g, '').trim();
+      const parsedData = JSON.parse(cleanJson);
+
+      const aiFood = {
+        food_name: parsedData.food_name || aiSearchText,
+        calories: parsedData.calories || 0,
+        protein: parsedData.protein || 0,
+        carbs: parsedData.carbs || 0,
+        fat: parsedData.fat || 0,
+        serving_size: parsedData.serving_size || '1인분',
+        maker_name: 'AI 텍스트 분석',
+      };
+
+      handleSelectFood(aiFood);
+
+    } catch (error) {
+      console.error("Gemini 텍스트 분석 오류:", error);
+      Alert.alert("분석 실패", "내용을 이해하지 못했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsAnalyzing(false);
     }
-    return [];
   };
 
   const handleSearchFood = async (query) => {
@@ -198,21 +322,9 @@ const MealLogger = ({ session }) => {
     const urlFoodName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=1&numOfRows=20&type=json&FOOD_NM_KR=${encodeURIComponent(query)}`;
     const urlMakerName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=1&numOfRows=20&type=json&MAKER_NM=${encodeURIComponent(query)}`;
 
-    let customData = [];
     let mfdsItems = [];
 
     try {
-      try {
-        const { data: customResult, error: customError } = await supabase
-          .from('user_custom_foods')
-          .select('*')
-          .eq('user_id', session.user.id)
-          .or(`food_name.ilike.%${query}%,maker_name.ilike.%${query}%`) 
-          .limit(5);
-        if (customError) throw customError; 
-        customData = (customResult || []).map(item => ({ ...item, maker_name: '나만의 음식' }));
-      } catch (supaError) { console.error("Supabase 검색 오류", supaError); }
-
       try {
         const [resFood, resMaker] = await Promise.all([
           axios.get(urlFoodName).catch(() => ({ data: null })),
@@ -253,8 +365,7 @@ const MealLogger = ({ session }) => {
         setMfdsHasMore(false);
       }
       
-      const combinedResults = [...customData, ...mfdsItems];
-      setSearchResults(combinedResults);
+      setSearchResults(mfdsItems);
 
     } catch (error) {
       Alert.alert('검색 오류', '데이터를 불러오는 중 오류가 발생했습니다.');
@@ -264,60 +375,61 @@ const MealLogger = ({ session }) => {
     }
   };
   
-  const handleLoadMore = async () => {
-    if (isSearchingMore || !mfdsHasMore) return;
-    setIsSearchingMore(true);
-    const nextPage = mfdsPageNo + 1;
-
-    const MFDS_API_KEY = 'cd9aec01b84399f9af32a83bd4a8ca8284be3e82202c1bd8c56ea667057325f6'; 
-    const baseUrl = `https://apis.data.go.kr/1471000/FoodNtrCpntDbInfo02/getFoodNtrCpntDbInq02`;
-    const urlFoodName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=${nextPage}&numOfRows=20&type=json&FOOD_NM_KR=${encodeURIComponent(searchQuery)}`;
-    const urlMakerName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=${nextPage}&numOfRows=20&type=json&MAKER_NM=${encodeURIComponent(searchQuery)}`;
-
-    try {
-      const [resFood, resMaker] = await Promise.all([
-        axios.get(urlFoodName).catch(() => ({ data: null })),
-        axios.get(urlMakerName).catch(() => ({ data: null }))
-      ]);
-      
-      const itemsFood = parseMfdsResponse(resFood.data);
-      const itemsMaker = parseMfdsResponse(resMaker.data);
-      const mergedItems = [...itemsFood, ...itemsMaker];
-      const uniqueItems = [];
-      const seenIds = new Set();
-
-      mergedItems.forEach(item => {
-        const id = item.FOOD_CD || item.foodCd;
-        if (id && !seenIds.has(id)) {
-          seenIds.add(id);
-          uniqueItems.push(item);
-        }
-      });
-
-      if (uniqueItems.length > 0) {
-        const newMfdsData = uniqueItems.map(item => ({
-          id: `mfds-${item.FOOD_CD || item.foodCd}`,
-          food_name: item.FOOD_NM_KR || item.foodNm,
-          maker_name: item.MAKER_NM || item.mkrNm || '',
-          serving_size: item.SERVING_SIZE || '',
-          calories: parseFloat(item.AMT_NUM1 || item.enerc) || 0,
-          protein: parseFloat(item.AMT_NUM3 || item.prot) || 0,
-          fat: parseFloat(item.AMT_NUM4 || item.fatce) || 0,
-          carbs: parseFloat(item.AMT_NUM6 || item.chocdf) || 0,
-        }));
-        setSearchResults(prevResults => [...prevResults, ...newMfdsData]);
-        setMfdsPageNo(nextPage);
-        
-        const totalCount1 = parseInt(resFood.data?.body?.totalCount || resFood.data?.response?.body?.totalCount || 0);
-        const totalCount2 = parseInt(resMaker.data?.body?.totalCount || resMaker.data?.response?.body?.totalCount || 0);
-        setMfdsHasMore((nextPage * 20) < Math.max(totalCount1, totalCount2));
-      } else { setMfdsHasMore(false); }
-    } catch (error) { setMfdsHasMore(false); } finally { setIsSearchingMore(false); }
+  const parseMfdsResponse = (data) => {
+    if (typeof data === 'string') return [];
+    const header = data?.header || data?.response?.header;
+    const body = data?.body || data?.response?.body;
+    if (header && header.resultCode === '00' && body && body.items) {
+      const itemsSource = Array.isArray(body.items) ? body.items : (body.items.item ? (Array.isArray(body.items.item) ? body.items.item : [body.items.item]) : [body.items]);
+      return [].concat(itemsSource).filter(i => i);
+    }
+    return [];
   };
+
+  const handleLoadMore = async () => {
+      if (isSearchingMore || !mfdsHasMore) return;
+      setIsSearchingMore(true);
+      const nextPage = mfdsPageNo + 1;
+      const MFDS_API_KEY = 'cd9aec01b84399f9af32a83bd4a8ca8284be3e82202c1bd8c56ea667057325f6'; 
+      const baseUrl = `https://apis.data.go.kr/1471000/FoodNtrCpntDbInfo02/getFoodNtrCpntDbInq02`;
+      const urlFoodName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=${nextPage}&numOfRows=20&type=json&FOOD_NM_KR=${encodeURIComponent(searchQuery)}`;
+      const urlMakerName = `${baseUrl}?serviceKey=${MFDS_API_KEY}&pageNo=${nextPage}&numOfRows=20&type=json&MAKER_NM=${encodeURIComponent(searchQuery)}`;
+      try {
+        const [resFood, resMaker] = await Promise.all([axios.get(urlFoodName).catch(() => ({ data: null })), axios.get(urlMakerName).catch(() => ({ data: null }))]);
+        const itemsFood = parseMfdsResponse(resFood.data);
+        const itemsMaker = parseMfdsResponse(resMaker.data);
+        const mergedItems = [...itemsFood, ...itemsMaker];
+        const uniqueItems = [];
+        const seenIds = new Set();
+        mergedItems.forEach(item => {
+          const id = item.FOOD_CD || item.foodCd;
+          if (id && !seenIds.has(id)) { seenIds.add(id); uniqueItems.push(item); }
+        });
+        if (uniqueItems.length > 0) {
+          const newMfdsData = uniqueItems.map(item => ({
+            id: `mfds-${item.FOOD_CD || item.foodCd}`,
+            food_name: item.FOOD_NM_KR || item.foodNm,
+            maker_name: item.MAKER_NM || item.mkrNm || '',
+            serving_size: item.SERVING_SIZE || '',
+            calories: parseFloat(item.AMT_NUM1 || item.enerc) || 0,
+            protein: parseFloat(item.AMT_NUM3 || item.prot) || 0,
+            fat: parseFloat(item.AMT_NUM4 || item.fatce) || 0,
+            carbs: parseFloat(item.AMT_NUM6 || item.chocdf) || 0,
+          }));
+          setSearchResults(prevResults => [...prevResults, ...newMfdsData]);
+          setMfdsPageNo(nextPage);
+          const totalCount1 = parseInt(resFood.data?.body?.totalCount || resFood.data?.response?.body?.totalCount || 0);
+          const totalCount2 = parseInt(resMaker.data?.body?.totalCount || resMaker.data?.response?.body?.totalCount || 0);
+          setMfdsHasMore((nextPage * 20) < Math.max(totalCount1, totalCount2));
+        } else { setMfdsHasMore(false); }
+      } catch (error) { setMfdsHasMore(false); } finally { setIsSearchingMore(false); }
+   };
 
   const handleSelectFood = (food) => {
     setSelectedFood(food);
     setServingMultiplier(1.0); 
+    setIsEditingNutrients(false);
+    setAdjustPurpose('log_meal'); 
     setModalMode('adjust'); 
   };
 
@@ -350,6 +462,13 @@ const MealLogger = ({ session }) => {
 
   const changeMultiplier = (amount) => {
     setServingMultiplier(prev => Math.max(0.5, prev + amount));
+  };
+
+  const updateSelectedFood = (key, value) => {
+    setSelectedFood(prev => ({
+      ...prev,
+      [key]: key === 'food_name' ? value : (parseFloat(value) || 0)
+    }));
   };
 
   const fetchMyFoods = async () => {
@@ -388,84 +507,104 @@ const MealLogger = ({ session }) => {
     ]);
   };
 
-  const openUpsertModal = (food = null) => {
+  const openCustomFoodModal = (food = null) => {
     if (food) {
-      setCustomFoodId(food.id);
-      setCustomFoodName(food.food_name);
-      setCustomCalories(food.calories.toString());
-      setCustomProtein(food.protein.toString());
-      setCustomCarbs(food.carbs.toString());
-      setCustomFat(food.fat.toString());
+      setSelectedFood({ ...food });
+      setSelectedFood(prev => ({
+        ...prev,
+        calories: parseFloat(prev.calories) || 0,
+        protein: parseFloat(prev.protein) || 0,
+        carbs: parseFloat(prev.carbs) || 0,
+        fat: parseFloat(prev.fat) || 0,
+      }));
+      setAdjustPurpose('update_custom');
     } else {
-      setCustomFoodId(null);
-      setCustomFoodName('');
-      setCustomCalories('');
-      setCustomProtein('');
-      setCustomCarbs('');
-      setCustomFat('');
+      setSelectedFood({
+        id: Date.now().toString(),
+        food_name: '',
+        calories: 0,
+        carbs: 0,
+        protein: 0,
+        fat: 0,
+        serving_size: '1인분',
+        maker_name: '나의 메뉴',
+      });
+      setAdjustPurpose('save_custom');
     }
-    setModalMode('upsert_custom');
+    setServingMultiplier(1.0);
+    setIsEditingNutrients(false);
+    setModalMode('adjust');
   };
 
   const openDirectInputModal = () => {
-    setCustomFoodId(null);
-    setCustomFoodName('');
-    setCustomCalories('');
-    setCustomProtein('');
-    setCustomCarbs('');
-    setCustomFat('');
-    setModalMode('direct_input'); 
+    setSelectedFood({
+      id: Date.now().toString(),
+      food_name: '',
+      calories: 0,
+      carbs: 0,
+      protein: 0,
+      fat: 0,
+      serving_size: '1인분',
+      maker_name: '직접 입력',
+    });
+    setAdjustPurpose('log_meal'); 
+    setModalVisible(true);
+    setModalMode('adjust');
   };
-
-  const handleDirectInput = () => {
-    if (!customFoodName || !customCalories) {
-      Alert.alert('입력 오류', '음식 이름과 칼로리는 필수 항목입니다.');
-      return;
-    }
-    const tempFood = {
-      food_name: customFoodName,
-      calories: parseInt(customCalories) || 0,
-      protein: parseInt(customProtein) || 0,
-      carbs: parseInt(customCarbs) || 0,
-      fat: parseInt(customFat) || 0,
-      maker_name: '직접 입력', 
-      serving_size: '1인분'
-    };
-    handleSelectFood(tempFood);
-    setCustomFoodName(''); setCustomCalories(''); setCustomProtein(''); setCustomCarbs(''); setCustomFat('');
-  };
-
+  
   const handleSaveCustomFood = async () => {
-    if (!customFoodName || !customCalories) {
+    if (!selectedFood || !selectedFood.food_name || selectedFood.calories === undefined) {
       Alert.alert('입력 오류', '음식 이름과 칼로리는 필수 항목입니다.');
       return;
     }
+
+    if (!session?.user) {
+      Alert.alert('오류', '로그인이 필요합니다.');
+      return;
+    }
+
     setIsSavingCustomFood(true);
+
     try {
       const foodData = {
         user_id: session.user.id,
-        food_name: customFoodName,
-        calories: parseInt(customCalories) || 0,
-        protein: parseInt(customProtein) || 0,
-        carbs: parseInt(customCarbs) || 0,
-        fat: parseInt(customFat) || 0,
-        maker_name: '나만의 음식'
+        food_name: selectedFood.food_name,
+        calories: parseInt(selectedFood.calories) || 0,
+        carbs: parseInt(selectedFood.carbs) || 0,
+        protein: parseInt(selectedFood.protein) || 0,
+        fat: parseInt(selectedFood.fat) || 0,
+        serving_size: selectedFood.serving_size || '1인분',
+        maker_name: selectedFood.maker_name || '나만의 음식',
       };
 
       let result;
-      if (customFoodId) {
-        result = await supabase.from('user_custom_foods').update(foodData).eq('id', customFoodId).select().single();
+      if (adjustPurpose === 'update_custom') {
+        result = await supabase
+          .from('user_custom_foods')
+          .update(foodData)
+          .eq('id', selectedFood.id)
+          .eq('user_id', session.user.id) 
+          .select();
       } else {
-        result = await supabase.from('user_custom_foods').insert([foodData]).select().single();
+        result = await supabase
+          .from('user_custom_foods')
+          .insert([foodData])
+          .select();
       }
       
       if (result.error) throw result.error;
+
+      if (result.data === null || result.data.length === 0) {
+        throw new Error("데이터를 저장하거나 수정할 수 없습니다. (권한 문제 등)");
+      }
       
       await fetchMyFoods();
-      setModalMode('my_foods'); 
-      Alert.alert('성공', '저장되었습니다.');
+      setModalMode('my_foods');
+      setSelectedFood(null);
+      Alert.alert('성공', `나의 메뉴가 ${adjustPurpose === 'update_custom' ? '수정' : '추가'}되었습니다.`);
 
     } catch (error) {
+      console.error("나의 메뉴 저장 오류:", error.message);
       Alert.alert('저장 오류', error.message);
     } finally {
       setIsSavingCustomFood(false);
@@ -559,8 +698,12 @@ const MealLogger = ({ session }) => {
         <View style={{ flex: 1 }}>
           <View style={styles.modalHeaderContainer}>
             <Text style={styles.modalHeader}>📝 나의 메뉴</Text>
-            <Button title="➕ 추가" onPress={() => openUpsertModal()} />
+            <TouchableOpacity style={styles.addFoodButton} onPress={() => openCustomFoodModal()}>
+              <Text style={styles.addFoodButtonText}>+  추가</Text>
+            </TouchableOpacity>
           </View>
+
+          
           {myFoodsList.length === 0 ? (
             <View style={styles.emptySearchContainer}>
               <Text style={styles.emptyText}>등록된 메뉴가 없습니다.</Text>
@@ -579,7 +722,7 @@ const MealLogger = ({ session }) => {
                     </Text>
                   </TouchableOpacity>
                   <View style={{flexDirection:'row'}}>
-                    <TouchableOpacity style={styles.iconButton} onPress={() => openUpsertModal(item)}>
+                    <TouchableOpacity style={styles.iconButton} onPress={() => openCustomFoodModal(item)}>
                       <Ionicons name="pencil" size={20} color="gray" />
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.iconButton} onPress={() => handleDeleteMyFood(item.id)}>
@@ -590,84 +733,116 @@ const MealLogger = ({ session }) => {
               )}
             />
           )}
-          <View style={{ marginTop: 10 }}>
-            <Button title="< 돌아가기" onPress={() => setModalMode('search')} color="gray" />
+
+          <View style={styles.closeButtonContainer}>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setModalMode('search')}>
+              <Text style={styles.closeButtonText}>돌아가기</Text>
+            </TouchableOpacity>
           </View>
         </View>
       );
     }
 
-    if (modalMode === 'upsert_custom') {
-      return (
-        <ScrollView>
-          <Text style={styles.modalHeader}>
-            {customFoodId ? '나의 메뉴 수정' : '새 메뉴 등록'}
-          </Text>
-          <TextInput style={styles.input} placeholder="음식 이름 (필수)" value={customFoodName} onChangeText={setCustomFoodName} />
-          <TextInput style={styles.input} placeholder="칼로리 (필수)" value={customCalories} onChangeText={setCustomCalories} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="단백질(g)" value={customProtein} onChangeText={setCustomProtein} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="탄수화물(g)" value={customCarbs} onChangeText={setCustomCarbs} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="지방(g)" value={customFat} onChangeText={setCustomFat} keyboardType="numeric" />
-          <Button 
-            title={isSavingCustomFood ? "저장 중..." : (customFoodId ? "수정 완료" : "등록 하기")} 
-            onPress={handleSaveCustomFood} 
-            disabled={isSavingCustomFood} 
-          />
-          <View style={{ marginTop: 10 }}>
-            <Button title="< 취소" onPress={() => setModalMode('my_foods')} color="gray" />
-          </View>
-        </ScrollView>
-      );
-    }
-
-    // ⭐️ [수정] 직접 입력 (간편 입력 -> 직접 입력)
-    if (modalMode === 'direct_input') {
-      return (
-        <ScrollView>
-          <Text style={styles.modalHeader}>⚡️ 직접 입력 (이번만 기록)</Text>
-          <TextInput style={styles.input} placeholder="음식 이름 (필수)" value={customFoodName} onChangeText={setCustomFoodName} />
-          <TextInput style={styles.input} placeholder="칼로리 (필수)" value={customCalories} onChangeText={setCustomCalories} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="단백질(g)" value={customProtein} onChangeText={setCustomProtein} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="탄수화물(g)" value={customCarbs} onChangeText={setCustomCarbs} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="지방(g)" value={customFat} onChangeText={setCustomFat} keyboardType="numeric" />
-          
-          <Button title="입력 완료" onPress={handleDirectInput} />
-          
-          <View style={{ marginTop: 10 }}>
-            <Button title="< 취소" onPress={() => setModalMode('search')} color="gray" />
-          </View>
-        </ScrollView>
-      );
-    }
-
     if (modalMode === 'adjust' && selectedFood) {
+      let buttonText = '식단에 추가하기';
+      let onConfirm = handleConfirmFood;
+      let isSaving = isSubmitting;
+
+      if (adjustPurpose === 'save_custom') {
+        buttonText = '나의 메뉴 저장';
+        onConfirm = handleSaveCustomFood;
+        isSaving = isSavingCustomFood;
+      } else if (adjustPurpose === 'update_custom') {
+        buttonText = '수정 완료';
+        onConfirm = handleSaveCustomFood;
+        isSaving = isSavingCustomFood;
+      }
+
       return (
-        <View style={{ flex: 1, justifyContent: 'center', padding: 20 }}>
-          <Text style={styles.modalHeader}>{selectedFood.food_name}</Text>
-          <Text style={{ textAlign: 'center', color: '#555', marginBottom: 20, fontSize: 16 }}>
-            기본: {selectedFood.serving_size || '1인분'}
-          </Text>
-          <View style={styles.adjustContainer}>
-            <TouchableOpacity onPress={() => changeMultiplier(-0.5)} style={styles.adjustBtn}>
-              <Text style={styles.adjustBtnText}>-</Text>
+        <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, justifyContent: 'center', padding: 20 }}>
+            {selectedFood.image && (
+              <Image 
+                source={{ uri: selectedFood.image }} 
+                style={styles.foodImage} 
+                resizeMode="contain" 
+              />
+            )}
+
+            <TextInput 
+              style={styles.modalHeaderInput} 
+              value={selectedFood.food_name} 
+              onChangeText={(text) => updateSelectedFood('food_name', text)}
+            />
+            
+            <Text style={{ textAlign: 'center', color: '#555', marginBottom: 20, fontSize: 16 }}>
+              기본: {selectedFood.serving_size || '1인분'}
+            </Text>
+            
+            <View style={styles.adjustContainer}>
+              <TouchableOpacity onPress={() => changeMultiplier(-0.5)} style={styles.adjustBtn}>
+                <Text style={styles.adjustBtnText}>-</Text>
+              </TouchableOpacity>
+              <Text style={styles.multiplierText}>{servingMultiplier}x</Text>
+              <TouchableOpacity onPress={() => changeMultiplier(0.5)} style={styles.adjustBtn}>
+                <Text style={styles.adjustBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.adjustedStats}>
+              {isEditingNutrients ? (
+                <>
+                  <View style={styles.editRow}>
+                    <Text style={styles.editLabel}>칼로리</Text>
+                    <TextInput style={styles.editInput} value={String(selectedFood.calories)} onChangeText={(t) => updateSelectedFood('calories', t)} keyboardType="numeric"/>
+                  </View>
+                  <View style={styles.editRow}>
+                    <Text style={styles.editLabel}>탄수화물</Text>
+                    <TextInput style={styles.editInput} value={String(selectedFood.carbs)} onChangeText={(t) => updateSelectedFood('carbs', t)} keyboardType="numeric"/>
+                  </View>
+                  <View style={styles.editRow}>
+                    <Text style={styles.editLabel}>단백질</Text>
+                    <TextInput style={styles.editInput} value={String(selectedFood.protein)} onChangeText={(t) => updateSelectedFood('protein', t)} keyboardType="numeric"/>
+                  </View>
+                  <View style={styles.editRow}>
+                    <Text style={styles.editLabel}>지방</Text>
+                    <TextInput style={styles.editInput} value={String(selectedFood.fat)} onChangeText={(t) => updateSelectedFood('fat', t)} keyboardType="numeric"/>
+                  </View>
+                  <TouchableOpacity style={styles.confirmButton} onPress={() => setIsEditingNutrients(false)}>
+                    <Text style={styles.confirmButtonText}>수정 완료</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.statText}>칼로리: {Math.round(selectedFood.calories * servingMultiplier)} kcal</Text>
+                  <Text style={styles.statText}>탄수화물: {Math.round(selectedFood.carbs * servingMultiplier)} g</Text>
+                  <Text style={styles.statText}>단백질: {Math.round(selectedFood.protein * servingMultiplier)} g</Text>
+                  <Text style={styles.statText}>지방: {Math.round(selectedFood.fat * servingMultiplier)} g</Text>
+                  <TouchableOpacity style={{marginTop:10}} onPress={() => setIsEditingNutrients(true)}>
+                    <Text style={{color:'#007bff', textDecorationLine:'underline'}}>🛠️ 영양성분 수정</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+
+            <TouchableOpacity style={styles.saveButton} onPress={onConfirm} disabled={isSaving}>
+              {isSaving ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text style={styles.saveButtonText}>{buttonText}</Text>
+              )}
             </TouchableOpacity>
-            <Text style={styles.multiplierText}>{servingMultiplier}x</Text>
-            <TouchableOpacity onPress={() => changeMultiplier(0.5)} style={styles.adjustBtn}>
-              <Text style={styles.adjustBtnText}>+</Text>
+            
+            <TouchableOpacity style={styles.cancelButton} onPress={() => {
+              if (adjustPurpose === 'save_custom' || adjustPurpose === 'update_custom') {
+                setModalMode('my_foods');
+              } else {
+                setModalMode('search');
+              }
+            }}>
+              <Text style={styles.cancelButtonText}>취소</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.adjustedStats}>
-            <Text style={styles.statText}>칼로리: {Math.round(selectedFood.calories * servingMultiplier)} kcal</Text>
-            <Text style={styles.statText}>탄수화물: {Math.round(selectedFood.carbs * servingMultiplier)} g</Text>
-            <Text style={styles.statText}>단백질: {Math.round(selectedFood.protein * servingMultiplier)} g</Text>
-            <Text style={styles.statText}>지방: {Math.round(selectedFood.fat * servingMultiplier)} g</Text>
-          </View>
-          <TouchableOpacity style={styles.saveButton} onPress={handleConfirmFood} disabled={isSubmitting}>
-            <Text style={styles.saveButtonText}>{isSubmitting ? "저장 중..." : "식단에 추가하기"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.cancelButton} onPress={() => setModalMode('search')}>
-            <Text style={styles.cancelButtonText}>취소</Text>
-          </TouchableOpacity>
         </View>
       );
     }
@@ -690,47 +865,105 @@ const MealLogger = ({ session }) => {
                     <Text style={styles.searchItemName}>{item.food_name}</Text>
                     <Text style={styles.searchItemMacros}>{item.calories} kcal</Text>
                     <Text style={styles.searchItemMacros}>
-                      탄: {item.carbs}g | 단: {item.protein}g | 지: {item.fat}g
+                      탄수화물: {item.carbs}g | 단백질: {item.protein}g | 지방: {item.fat}g
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.starButton} onPress={() => toggleFavorite(item)}>
-                    <Ionicons name="star" size={24} color="#FFD700" />
+                    <Ionicons 
+                      name={favoritesList.some(f => f.food_name === item.food_name) ? "star" : "star-outline"} 
+                      size={24} 
+                      color={favoritesList.some(f => f.food_name === item.food_name) ? "#FFD700" : "#ccc"} 
+                    />
                   </TouchableOpacity>
                 </View>
               )}
             />
           )}
-          <View style={{ marginTop: 10 }}>
-            <Button title="< 돌아가기" onPress={() => setModalMode('search')} color="gray" />
+
+          {/* ⭐️ [수정] 즐겨찾기 모달의 돌아가기 버튼을 하단 고정 스타일로 변경 */}
+          <View style={styles.closeButtonContainer}>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setModalMode('search')}>
+              <Text style={styles.closeButtonText}>돌아가기</Text>
+            </TouchableOpacity>
           </View>
         </View>
       );
     }
 
-    if (modalMode === 'barcode') {
+    if (modalMode === 'ai_image') {
       return (
         <View style={{ flex: 1 }}>
-          <View style={{ flex: 1, position: 'relative' }}>
-            <CameraView 
-              style={StyleSheet.absoluteFillObject}
-              facing="back"
-              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-              barcodeScannerSettings={{
-                barcodeTypes: ["ean13", "ean8", "upc_e", "qr"], 
-              }}
-            />
-            <View style={[styles.barcodeOverlay, StyleSheet.absoluteFillObject]} pointerEvents="none">
-              <Text style={styles.barcodeText}>바코드를 스캔하세요</Text>
-            </View>
-          </View>
-          <Button title="닫기" onPress={() => setModalMode('search')} />
+           {isAnalyzing && (
+             <View style={styles.loadingOverlay}>
+               <View style={styles.loadingBox}>
+                 <ActivityIndicator size="large" color="#007bff" />
+                 <Text style={styles.loadingText}>AI가 영양성분표를 분석 중입니다...</Text>
+                 <Text style={styles.loadingSubText}>잠시만 기다려주세요.</Text>
+               </View>
+             </View>
+           )}
+           
+           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+             <Text style={{ fontSize: 16, color: '#555', marginBottom: 20, textAlign: 'center' }}>
+               식품 포장지의 영양정보 표를{'\n'}촬영하거나 앨범에서 선택하세요.
+             </Text>
+             <Button title="📸 촬영 / 앨범 선택" onPress={handleNutritionScan} />
+           </View>
+
+           <View style={{ padding: 20 }}>
+             <Button title="닫기" onPress={() => setModalMode('search')} color="gray" />
+           </View>
+        </View>
+      );
+    }
+
+    if (modalMode === 'ai_text') {
+      return (
+        <View style={{ flex: 1 }}>
+           <Text style={styles.modalHeader}>💬 AI에게 물어보기</Text>
+           
+           <View style={{ flex: 1, padding: 20 }}>
+             <Text style={{ fontSize: 16, color: '#555', marginBottom: 10 }}>
+               먹은 음식을 자유롭게 적어주세요.{'\n'}
+               (예: 피자 2조각, 사과 1개, 닭가슴살 100g)
+             </Text>
+             
+             <TextInput
+               style={[styles.input, { height: 100, textAlignVertical: 'top', padding: 10 }]}
+               placeholder="여기에 입력하세요..."
+               multiline={true}
+               value={aiSearchText}
+               onChangeText={setAiSearchText}
+             />
+             
+             <TouchableOpacity style={[styles.saveButton, { marginTop: 20 }]} onPress={analyzeTextWithGemini}>
+                {isAnalyzing ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={styles.saveButtonText}>🔍 분석 시작</Text>
+                )}
+             </TouchableOpacity>
+           </View>
+
+           <View style={styles.closeButtonContainer}>
+             <TouchableOpacity style={styles.closeButton} onPress={() => setModalMode('search')}>
+               <Text style={styles.closeButtonText}>돌아가기</Text>
+             </TouchableOpacity>
+           </View>
         </View>
       );
     }
 
     return (
       <View style={{ flex: 1 }}>
-        <Text style={styles.modalHeader}>{MEAL_TYPES.find(t=>t.key===mealType)?.label} 메뉴 추가</Text>
+        <View style={styles.modalHeaderContainer}>
+          <Text style={styles.modalHeader}>{MEAL_TYPES.find(t=>t.key===mealType)?.label} 메뉴 추가</Text>
+          
+          <TouchableOpacity style={styles.headerFavoriteButton} onPress={handleOpenFavorites}>
+            <Ionicons name="star" size={28} color="#FFD700" />
+          </TouchableOpacity>
+        </View>
+
         <TextInput
           style={styles.searchInput}
           placeholder="음식 이름 검색 (예: 닭가슴살)"
@@ -744,22 +977,29 @@ const MealLogger = ({ session }) => {
                 <Text style={styles.quickButtonIcon}>📝</Text>
                 <Text style={styles.quickButtonText}>나의 메뉴</Text>
               </TouchableOpacity>
-              {/* ⭐️ [수정] 간편 입력 -> 직접 입력 */}
               <TouchableOpacity style={styles.quickButton} onPress={openDirectInputModal}>
                 <Text style={styles.quickButtonIcon}>⚡️</Text>
                 <Text style={styles.quickButtonText}>직접 입력</Text>
               </TouchableOpacity>
             </View>
             
-            <View style={{flexDirection:'row', justifyContent:'space-between', width:'100%'}}>
-              <TouchableOpacity style={styles.quickButton} onPress={openBarcodeScanner}>
-                <Text style={styles.quickButtonIcon}>📷</Text>
-                <Text style={styles.quickButtonText}>바코드</Text>
+            <View style={{flexDirection:'row', justifyContent:'space-between', width:'100%', marginBottom: 10}}>
+               <TouchableOpacity style={styles.quickButton} onPress={() => {
+                  setAiSearchText(''); 
+                  setModalMode('ai_text'); 
+               }}>
+                <Text style={styles.quickButtonIcon}>💬</Text>
+                <Text style={styles.quickButtonText}>AI 검색</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.quickButton} onPress={handleOpenFavorites}>
-                <Text style={styles.quickButtonIcon}>⭐</Text>
-                <Text style={styles.quickButtonText}>즐겨찾기</Text>
+
+              <TouchableOpacity style={styles.quickButton} onPress={handleNutritionScan}>
+                <Text style={styles.quickButtonIcon}>📸</Text>
+                <Text style={styles.quickButtonText}>영양정보 촬영</Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={{flexDirection:'row', justifyContent:'flex-start', width:'100%'}}>
+              {/* 빈 공간 */}
             </View>
           </View>
         ) : (
@@ -814,16 +1054,62 @@ const MealLogger = ({ session }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <Modal visible={modalVisible} animationType="slide" onRequestClose={() => setModalVisible(false)}>
-        <SafeAreaView style={styles.modalContainer}>{renderModalContent()}</SafeAreaView>
+        <SafeAreaView style={styles.modalContainer}>
+          
+          {isAnalyzing && (
+             <View style={styles.loadingOverlay}>
+               <View style={styles.loadingBox}>
+                 <ActivityIndicator size="large" color="#007bff" />
+                 <Text style={styles.loadingText}>AI가 영양성분표를 분석 중입니다...</Text>
+                 <Text style={styles.loadingSubText}>잠시만 기다려주세요.</Text>
+               </View>
+             </View>
+           )}
+           
+          {renderModalContent()}
+        </SafeAreaView>
       </Modal>
 
       <ScrollView style={styles.container}>
         <View style={styles.summaryContainer}>
-          <View style={styles.dateNavigator}>
-            <Button title="◀ 이전" onPress={handlePrevDay} />
-            <Text style={styles.header}>{getFormattedDate(selectedDate)}</Text>
-            <Button title="다음 ▶" onPress={handleNextDay} disabled={isToday} color={isToday ? undefined : "#007bff"} />
+          
+          <View style={styles.dateHeaderContainer}>
+            <Text style={styles.yearText}>{selectedDate.getFullYear()}</Text>
+            
+            <View style={styles.dateNavRow}>
+              <TouchableOpacity onPress={handlePrevDay} style={styles.navButton}>
+                <Text style={styles.navTextSmall}>
+                  {formatDateMMDD(prevDateObj)}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setShowDatePicker(true)}>
+                <Text style={styles.dateTextLarge}>
+                  {formatDateMMDD(selectedDate)}
+                  {isSameDay(selectedDate, new Date()) && (
+                    <Text style={styles.todayTextSmall}> (오늘)</Text>
+                  )}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={handleNextDay} style={styles.navButton}>
+                <Text style={styles.navTextSmall}>
+                  {formatDateMMDD(nextDateObj)}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
+          
+          {showDatePicker && (
+            <DateTimePicker
+              testID="dateTimePicker"
+              value={selectedDate}
+              mode="date"
+              display="default"
+              onChange={onChangeDate}
+            />
+          )}
+
           <Text style={styles.calorieSummary}>
             {totalCalories} <Text style={styles.calorieGoalText}>/ {goalCalories} kcal</Text>
           </Text>
@@ -867,7 +1153,7 @@ const MealLogger = ({ session }) => {
                     <View style={styles.logInfo}>
                       <Text style={styles.logTextFood}>{item.food_name}</Text>
                       <Text style={styles.logTextMacros}>
-                        {item.calories}kcal | 탄:{item.carbs}g 단:{item.protein}g 지:{item.fat}g
+                        {item.calories}kcal | 탄수화물:{item.carbs}g 단백질:{item.protein}g 지방:{item.fat}g
                       </Text>
                     </View>
                     <TouchableOpacity onPress={() => handleDeleteMeal(item.id)} style={styles.deleteButton}>
@@ -891,7 +1177,6 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#fff' },
   container: { flex: 1, padding: 15, backgroundColor: '#f8f8f8' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
   summaryContainer: { padding: 15, backgroundColor: '#fff', borderRadius: 15, marginBottom: 20, marginTop: 30, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 3 },
   dateNavigator: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 10 },
   header: { fontSize: 20, fontWeight: 'bold' },
@@ -917,8 +1202,24 @@ const styles = StyleSheet.create({
   deleteText: { fontSize: 16, color: '#ff4444' },
   noMealText: { color: '#ccc', fontStyle: 'italic', textAlign: 'center', padding: 10 },
   modalContainer: { flex: 1, padding: 20, marginTop: 20, backgroundColor: '#fff' },
-  modalHeader: { fontSize: 24, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  modalHeaderContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  modalHeaderContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    marginBottom: 15,
+    position: 'relative', 
+    width: '100%', 
+  },
+  modalHeader: { 
+    fontSize: 24, 
+    fontWeight: 'bold', 
+    textAlign: 'center',
+  },
+  headerFavoriteButton: {
+    position: 'absolute', 
+    right: 0,             
+    padding: 5,
+  },
   searchInput: { height: 40, borderColor: 'gray', borderWidth: 1, borderRadius: 5, paddingHorizontal: 10, backgroundColor: '#fff', marginBottom: 15 },
   searchItemContainer: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#eee', paddingRight: 10 },
   searchItem: { flex: 1, padding: 15, borderBottomWidth: 0 },
@@ -929,33 +1230,17 @@ const styles = StyleSheet.create({
   iconButton: { padding: 10 },
   emptySearchContainer: { padding: 20, alignItems: 'center' },
   emptyText: { textAlign: 'center', color: 'gray', padding: 20 },
-  // ⭐️ [수정] 버튼 레이아웃 (2줄 정렬, 너비 확장)
   quickButtonsContainer: { 
     flexDirection: 'column', 
     alignItems: 'center', 
     marginTop: 20, 
     marginBottom: 30, 
-    paddingHorizontal: 10,
-    width: '100%',
+    paddingHorizontal: 10, 
+    width: '100%' 
   },
-  quickButton: { 
-    backgroundColor: '#f0f8ff', 
-    paddingVertical: 20, 
-    borderRadius: 12, 
-    width: '48%', // 2개씩 꽉 차게
-    height: 90, 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    borderColor: '#007bff', 
-    borderWidth: 1, 
-    shadowColor: "#000", 
-    shadowOffset: { width: 0, height: 2 }, 
-    shadowOpacity: 0.1, 
-    shadowRadius: 3, 
-    elevation: 2 
-  },
+  quickButton: { backgroundColor: '#f0f8ff', paddingVertical: 20, borderRadius: 12, width: '48%', height: 90, alignItems: 'center', justifyContent: 'center', borderColor: '#007bff', borderWidth: 1, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 },
   quickButtonIcon: { fontSize: 24, marginBottom: 5 },
-  quickButtonText: { fontSize: 16, fontWeight: 'bold', color: '#007bff' },
+  quickButtonText: { fontSize: 14, fontWeight: 'bold', color: '#007bff' },
   closeButtonContainer: { marginTop: 'auto', marginBottom: 20 },
   closeButton: { backgroundColor: '#e0e0e0', padding: 15, borderRadius: 10, alignItems: 'center' },
   closeButtonText: { fontSize: 16, fontWeight: 'bold', color: '#555' },
@@ -970,8 +1255,144 @@ const styles = StyleSheet.create({
   cancelButton: { padding: 15, alignItems: 'center' },
   cancelButtonText: { color: 'gray', fontSize: 16 },
   input: { height: 40, borderColor: 'gray', borderWidth: 1, borderRadius: 5, paddingHorizontal: 10, backgroundColor: '#fff', marginBottom: 10 },
-  barcodeOverlay: { flex: 1, justifyContent: 'flex-end', paddingBottom: 50, alignItems: 'center' },
-  barcodeText: { color: '#fff', fontSize: 20, fontWeight: 'bold', backgroundColor: 'rgba(0,0,0,0.5)', padding: 10, borderRadius: 10 },
+  
+  dateHeaderContainer: {
+    alignItems: 'center',
+    marginBottom: 10,
+    width: '100%',
+  },
+  yearText: {
+    fontSize: 14,
+    color: '#888',
+    fontWeight: '600',
+    marginBottom: 5,
+  },
+  dateNavRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    width: '100%',
+    paddingHorizontal: 10, 
+  },
+  navButton: {
+    padding: 10, 
+  },
+  navTextSmall: {
+    fontSize: 18,      
+    color: '#888',
+    fontWeight: '600', 
+  },
+  dateTextLarge: {
+    fontSize: 28, 
+    fontWeight: 'bold',
+    color: '#333',
+    textAlignVertical: 'bottom', 
+  },
+  todayTextSmall: {
+    fontSize: 16,    
+    color: '#888',   
+    fontWeight: 'normal', 
+  },
+  disabledText: {
+    color: '#e0e0e0', 
+  },
+
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject, 
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000, 
+  },
+  loadingBox: {
+    width: 280,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    fontSize: 16,
+    textAlign: 'center'
+  },
+  loadingSubText: {
+    marginTop: 5,
+    color: '#777',
+    fontSize: 12,
+  },
+  
+  modalHeaderInput: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#ddd',
+    paddingBottom: 5,
+  },
+  
+  editRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 10,
+  },
+  editLabel: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    width: '30%',
+  },
+  editInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 5,
+    padding: 8,
+    width: '60%',
+    backgroundColor: '#fff',
+  },
+  foodImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 15,
+    marginBottom: 20,
+    backgroundColor: '#f0f0f0', 
+  },
+  confirmButton: {
+    backgroundColor: '#007bff', 
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
+    width: '40%',
+  },
+  confirmButtonText: {
+    color: 'white', 
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  addFoodButton: { 
+    backgroundColor: '#007bff', 
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: 10, 
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute', 
+    right: 0,             
+  },
+  addFoodButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  // ⭐️ [삭제] 더 이상 사용하지 않는 스타일 제거됨
 });
 
 export default MealLogger;
