@@ -796,7 +796,7 @@ const MealLogger = ({ session }) => {
                     <Text style={styles.searchItemName}>{item.food_name}</Text>
                     <Text style={styles.searchItemMacros}>{item.calories} kcal</Text>
                     <Text style={styles.searchItemMacros}>
-                      탄: {item.carbs}g | 단: {item.protein}g | 지: {item.fat}g
+                      탄수화물: {item.carbs}g | 단백질: {item.protein}g | 지방: {item.fat}g
                     </Text>
                   </TouchableOpacity>
                   <View style={{flexDirection:'row'}}>
