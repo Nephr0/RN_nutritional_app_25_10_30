@@ -27,10 +27,8 @@ import { supabase } from './supabaseClient';
 import { getFormattedDate } from './MealLogger';
 
 const StatisticsScreen = ({ session }) => {
-  // ⭐️ [수정] 화면 너비 및 셀 크기 계산을 컴포넌트 내부로 이동
   const screenWidth = Dimensions.get('window').width;
   const chartWidth = screenWidth - 40;
-  // (전체너비 - 좌우패딩30 - 달력내부패딩20 - 보정값2) / 7
   const cellWidth = (screenWidth - 52) / 7; 
 
   const [loading, setLoading] = useState(true);
@@ -43,7 +41,7 @@ const StatisticsScreen = ({ session }) => {
   const [weekOffset, setWeekOffset] = useState(0);
   const [dateRangeText, setDateRangeText] = useState('');
   const [currentYear, setCurrentYear] = useState('');
-  const [weeklyNutrients, setWeeklyNutrients] = useState({ carbs: 0, protein: 0, fat: 0 });
+  const [weeklyNutrients, setWeeklyNutrients] = useState({ carbs: 0, protein: 0, fat: 0, sugar: 0, sodium: 0 });
   const [avgCalories, setAvgCalories] = useState(0);
   const [successDays, setSuccessDays] = useState(0);
   const [mealTypeData, setMealTypeData] = useState({ breakfast: [], lunch: [], dinner: [], snack: [] });
@@ -90,7 +88,7 @@ const StatisticsScreen = ({ session }) => {
         </View>
 
         <Text style={styles.nutrientBarValue}>{Math.round(value)}/{Math.round(goal)}g</Text>
-        <Text style={[styles.nutrientBarPercent, isOver && styles.textRed]}>
+        <Text style={[styles.nutrientBarPercent, isOver ? styles.textRed : null]}>
           {percent}%
         </Text>
       </View>
@@ -132,7 +130,7 @@ const StatisticsScreen = ({ session }) => {
 
       const { data: logsData, error: logsError } = await supabase
         .from('meal_logs')
-        .select('date, meal_type, calories, protein, carbs, fat')
+        .select('date, meal_type, calories, protein, carbs, fat, sugar, sodium')
         .eq('user_id', session.user.id)
         .gte('date', getFormattedDate(periodStartDate))
         .lte('date', getFormattedDate(periodEndDate))
@@ -141,6 +139,7 @@ const StatisticsScreen = ({ session }) => {
       if (logsError) throw logsError;
 
       let totalCarbs = 0, totalProtein = 0, totalFat = 0;
+      let totalSugar = 0, totalSodium = 0;
       let totalWeeklyCalories = 0;
       let daysWithRecords = new Set();
       let dailyMap = {}; 
@@ -169,6 +168,9 @@ const StatisticsScreen = ({ session }) => {
         totalCarbs += log.carbs || 0;
         totalProtein += log.protein || 0;
         totalFat += log.fat || 0;
+        totalSugar += log.sugar || 0;
+        totalSodium += log.sodium || 0;
+        
         totalWeeklyCalories += log.calories || 0;
         dailyMap[dateStr] += log.calories || 0;
 
@@ -182,7 +184,7 @@ const StatisticsScreen = ({ session }) => {
 
       const recordDaysCount = daysWithRecords.size || 1;
       setAvgCalories(Math.round(totalWeeklyCalories / recordDaysCount));
-      setWeeklyNutrients({ carbs: totalCarbs, protein: totalProtein, fat: totalFat });
+      setWeeklyNutrients({ carbs: totalCarbs, protein: totalProtein, fat: totalFat, sugar: totalSugar, sodium: totalSodium });
       setMealTypeData(newMealData);
       setDailyTotalData(newDailyTotal);
       setChartData(newDailyTotal); 
@@ -230,7 +232,7 @@ const StatisticsScreen = ({ session }) => {
 
       const { data: logsData, error } = await supabase
         .from('meal_logs')
-        .select('date, calories, protein, carbs, fat')
+        .select('date, calories, protein, carbs, fat, sugar, fiber, saturated_fat, trans_fat, cholesterol, sodium, potassium')
         .eq('user_id', session.user.id)
         .gte('date', getFormattedDate(startDate))
         .lte('date', getFormattedDate(endDate));
@@ -241,12 +243,31 @@ const StatisticsScreen = ({ session }) => {
       logsData.forEach(log => {
         const d = log.date;
         if (!map[d]) {
-          map[d] = { calories: 0, carbs: 0, protein: 0, fat: 0 };
+          map[d] = { 
+            calories: 0, 
+            carbs: 0, 
+            protein: 0, 
+            fat: 0,
+            sugar: 0,
+            fiber: 0,
+            saturated_fat: 0,
+            trans_fat: 0,
+            cholesterol: 0,
+            sodium: 0,
+            potassium: 0,
+          };
         }
         map[d].calories += log.calories || 0;
         map[d].carbs += log.carbs || 0;
         map[d].protein += log.protein || 0;
         map[d].fat += log.fat || 0;
+        map[d].sugar += log.sugar || 0;
+        map[d].fiber += log.fiber || 0;
+        map[d].saturated_fat += log.saturated_fat || 0;
+        map[d].trans_fat += log.trans_fat || 0;
+        map[d].cholesterol += log.cholesterol || 0;
+        map[d].sodium += log.sodium || 0;
+        map[d].potassium += log.potassium || 0;
       });
       setMonthlyData(map);
 
@@ -286,9 +307,13 @@ const StatisticsScreen = ({ session }) => {
     const maxDailyCal = dailyTotalData.length > 0 ? Math.max(...dailyTotalData.map(d => d.y)) : 0;
     const maxDomain = Math.max(maxDailyCal, goalCalories) * 1.3 || 2000;
 
-    const carbsP = dailyGoalNutrients.carbs > 0 ? Math.round((weeklyNutrients.carbs / (dailyGoalNutrients.carbs * 7)) * 100) : 0;
-    const proteinP = dailyGoalNutrients.protein > 0 ? Math.round((weeklyNutrients.protein / (dailyGoalNutrients.protein * 7)) * 100) : 0;
-    const fatP = dailyGoalNutrients.fat > 0 ? Math.round((weeklyNutrients.fat / (dailyGoalNutrients.fat * 7)) * 100) : 0;
+    const weeklyGoalCarbs = dailyGoalNutrients.carbs * 7;
+    const weeklyGoalProtein = dailyGoalNutrients.protein * 7;
+    const weeklyGoalFat = dailyGoalNutrients.fat * 7;
+
+    const carbsP = weeklyGoalCarbs > 0 ? Math.round((weeklyNutrients.carbs / weeklyGoalCarbs) * 100) : 0;
+    const proteinP = weeklyGoalProtein > 0 ? Math.round((weeklyNutrients.protein / weeklyGoalProtein) * 100) : 0;
+    const fatP = weeklyGoalFat > 0 ? Math.round((weeklyNutrients.fat / weeklyGoalFat) * 100) : 0;
 
     return (
       <ScrollView style={styles.contentContainer}>
@@ -309,7 +334,10 @@ const StatisticsScreen = ({ session }) => {
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>목표 달성</Text>
-              <Text style={styles.summaryValue}><Text style={{color: '#4CAF50'}}>{successDays}</Text> / 7일</Text>
+              <Text style={styles.summaryValue}>
+                <Text style={{color: '#4CAF50'}}>{successDays}</Text>
+                <Text> / 7일</Text>
+              </Text>
             </View>
             <View style={styles.verticalLine} />
             <View style={styles.summaryItem}>
@@ -320,11 +348,20 @@ const StatisticsScreen = ({ session }) => {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>주간 영양소 비율</Text>
+          <Text style={styles.cardTitle}>주간 영양소 섭취량</Text>
           <View style={styles.nutrientBarContainer}>
-            {renderNutrientBar('탄수화물', weeklyNutrients.carbs, dailyGoalNutrients.carbs * 7, carbsP, '#2196F3', '#E3F2FD')}
-            {renderNutrientBar('단백질', weeklyNutrients.protein, dailyGoalNutrients.protein * 7, proteinP, '#F44336', '#FFEBEE')}
-            {renderNutrientBar('지방', weeklyNutrients.fat, dailyGoalNutrients.fat * 7, fatP, '#FBC02D', '#FFF9C4')}
+            {renderNutrientBar('탄수화물', weeklyNutrients.carbs, weeklyGoalCarbs, carbsP, '#2196F3', '#E3F2FD')}
+            {renderNutrientBar('단백질', weeklyNutrients.protein, weeklyGoalProtein, proteinP, '#F44336', '#FFEBEE')}
+            {renderNutrientBar('지방', weeklyNutrients.fat, weeklyGoalFat, fatP, '#FBC02D', '#FFF9C4')}
+          </View>
+
+          <View style={styles.additionalNutrientContainerSingleLine}>
+            <Text style={styles.additionalNutrientText}>
+              당류 <Text style={styles.additionalNutrientValue}>{weeklyNutrients.sugar}g</Text>
+            </Text>
+            <Text style={[styles.additionalNutrientText, { marginLeft: 25 }]}>
+              나트륨 <Text style={styles.additionalNutrientValue}>{weeklyNutrients.sodium}mg</Text>
+            </Text>
           </View>
         </View>
 
@@ -398,7 +435,12 @@ const StatisticsScreen = ({ session }) => {
           <Text style={styles.chartTitle}>일별 칼로리 달성률</Text>
           <View style={styles.weekRow}>
             {['일', '월', '화', '수', '목', '금', '토'].map((d, i) => (
-              <Text key={i} style={[styles.dayHeader, { width: cellWidth }, i===0 && {color:'#F44336'}, i===6 && {color:'#2196F3'}]}>{d}</Text>
+              <Text key={i} style={[
+                styles.dayHeader, 
+                { width: cellWidth }, 
+                i === 0 ? {color:'#F44336'} : null, 
+                i === 6 ? {color:'#2196F3'} : null
+              ]}>{d}</Text>
             ))}
           </View>
           
@@ -412,8 +454,11 @@ const StatisticsScreen = ({ session }) => {
               const percent = goalCalories > 0 ? Math.round((intake / goalCalories) * 100) : 0;
               
               let percentColor = '#888'; 
-              if (percent >= 80 && percent <= 120) percentColor = '#007bff';
-              else if (percent > 120) percentColor = '#F44336';
+              if (percent >= 90 && percent <= 100) {
+                percentColor = '#007bff';
+              } else if (percent > 100) {
+                percentColor = '#F44336';
+              }
               
               const isSelected = selectedDateDetail?.date === dateStr;
 
@@ -423,11 +468,15 @@ const StatisticsScreen = ({ session }) => {
                   style={[
                     styles.dayCell, 
                     { width: cellWidth },
-                    isSelected && styles.selectedDayCell 
+                    isSelected ? styles.selectedDayCell : null 
                   ]}
                   onPress={() => handleDayPress(dateStr, dayData)}
                 >
-                  <Text style={[styles.dayNumber, index % 7 === 0 && {color:'#F44336'}, index % 7 === 6 && {color:'#2196F3'}]}>
+                  <Text style={[
+                    styles.dayNumber, 
+                    index % 7 === 0 ? {color:'#F44336'} : null, 
+                    index % 7 === 6 ? {color:'#2196F3'} : null
+                  ]}>
                     {day}
                   </Text>
                   {intake > 0 ? (
@@ -446,25 +495,75 @@ const StatisticsScreen = ({ session }) => {
         </View>
         
         {selectedDateDetail ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{selectedDateDetail.date} 상세 정보</Text>
-            <View style={{marginBottom: 15}}>
-              <Text style={{fontSize: 16, color: '#333', marginBottom: 5}}>
-                총 섭취 칼로리: <Text style={{fontWeight:'bold'}}>{selectedDateDetail.calories}</Text> / {goalCalories} kcal
+          <ScrollView style={styles.card}> 
+            <Text style={styles.cardTitle}>
+              {(() => {
+                const [y, m, d] = selectedDateDetail.date.split('-');
+                const day = parseInt(d, 10);
+                return `${day}일`;
+              })()} 상세 정보
+            </Text>
+            
+            <View style={{marginBottom: 20, alignItems: 'center'}}>
+              <Text style={{fontSize: 16, color: '#333', marginBottom: 5}}>총 섭취 칼로리</Text>
+              <Text style={{fontSize: 24, fontWeight:'bold', color: '#007bff'}}>
+                {selectedDateDetail.calories} <Text style={{fontSize: 16, color: '#333'}}>/ {goalCalories} kcal</Text>
               </Text>
             </View>
 
-            <View style={styles.nutrientBarContainer}>
-              {renderNutrientBar('탄수화물', selectedDateDetail.carbs, dailyGoalNutrients.carbs, 
-                dailyGoalNutrients.carbs > 0 ? Math.round((selectedDateDetail.carbs/dailyGoalNutrients.carbs)*100) : 0, '#2196F3', '#E3F2FD')}
+            <View style={styles.simpleStatsContainer}>
+              <Text style={styles.statTextHeader}>섭취 영양소 정보</Text>
               
-              {renderNutrientBar('단백질', selectedDateDetail.protein, dailyGoalNutrients.protein, 
-                dailyGoalNutrients.protein > 0 ? Math.round((selectedDateDetail.protein/dailyGoalNutrients.protein)*100) : 0, '#F44336', '#FFEBEE')}
-              
-              {renderNutrientBar('지방', selectedDateDetail.fat, dailyGoalNutrients.fat, 
-                dailyGoalNutrients.fat > 0 ? Math.round((selectedDateDetail.fat/dailyGoalNutrients.fat)*100) : 0, '#FBC02D', '#FFF9C4')}
+              <View style={styles.simpleStatRow}>
+                <Text style={styles.statLabel}>🔥 칼로리</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.calories} kcal</Text>
+              </View>
+
+              <View style={styles.viewRowHeader}>
+                <Text style={styles.statLabel}>🍚 탄수화물</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.carbs} g</Text>
+              </View>
+              <View style={styles.viewRowSub}>
+                <Text style={styles.viewLabelSub}>- 당</Text>
+                <Text style={styles.viewValueSub}>{selectedDateDetail.sugar || 0} g</Text>
+              </View>
+              <View style={styles.viewRowSubLast}>
+                <Text style={styles.viewLabelSub}>- 식이섬유</Text>
+                <Text style={styles.viewValueSub}>{selectedDateDetail.fiber || 0} g</Text>
+              </View>
+
+              <View style={styles.simpleStatRow}>
+                <Text style={styles.statLabel}>🥩 단백질</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.protein} g</Text>
+              </View>
+
+              <View style={styles.viewRowHeader}>
+                <Text style={styles.statLabel}>🥑 지방</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.fat} g</Text>
+              </View>
+              <View style={styles.viewRowSub}>
+                <Text style={styles.viewLabelSub}>- 포화지방</Text>
+                <Text style={styles.viewValueSub}>{selectedDateDetail.saturated_fat || 0} g</Text>
+              </View>
+              <View style={styles.viewRowSubLast}>
+                <Text style={styles.viewLabelSub}>- 트랜스지방</Text>
+                <Text style={styles.viewValueSub}>{selectedDateDetail.trans_fat || 0} g</Text>
+              </View>
+
+              <View style={styles.simpleStatRow}>
+                <Text style={styles.statLabel}>콜레스테롤</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.cholesterol || 0} mg</Text>
+              </View>
+              <View style={styles.simpleStatRow}>
+                <Text style={styles.statLabel}>나트륨</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.sodium || 0} mg</Text>
+              </View>
+              <View style={styles.simpleStatRow}>
+                <Text style={styles.statLabel}>칼륨</Text>
+                <Text style={styles.statValue}>{selectedDateDetail.potassium || 0} mg</Text>
+              </View>
             </View>
-          </View>
+          </ScrollView>
         ) : (
           <Text style={styles.hintText}>날짜를 터치하면 상세 정보가 표시됩니다.</Text>
         )}
@@ -478,16 +577,16 @@ const StatisticsScreen = ({ session }) => {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.tabContainer}>
         <TouchableOpacity 
-          style={[styles.tabButton, viewMode === 'weekly' && styles.activeTab]} 
+          style={[styles.tabButton, viewMode === 'weekly' ? styles.activeTab : null]} 
           onPress={() => setViewMode('weekly')}
         >
-          <Text style={[styles.tabText, viewMode === 'weekly' && styles.activeTabText]}>주간 통계</Text>
+          <Text style={[styles.tabText, viewMode === 'weekly' ? styles.activeTabText : null]}>주간 통계</Text>
         </TouchableOpacity>
         <TouchableOpacity 
-          style={[styles.tabButton, viewMode === 'monthly' && styles.activeTab]} 
+          style={[styles.tabButton, viewMode === 'monthly' ? styles.activeTab : null]} 
           onPress={() => setViewMode('monthly')}
         >
-          <Text style={[styles.tabText, viewMode === 'monthly' && styles.activeTabText]}>월간 통계</Text>
+          <Text style={[styles.tabText, viewMode === 'monthly' ? styles.activeTabText : null]}>월간 통계</Text>
         </TouchableOpacity>
       </View>
 
@@ -560,9 +659,80 @@ const styles = StyleSheet.create({
   dayNumber: { fontSize: 12, fontWeight: 'bold', color: '#333', marginBottom: 2 },
   cellContent: { alignItems: 'center', justifyContent: 'center', flex: 1 },
   cellPercent: { fontSize: 13, fontWeight: 'bold', marginBottom: 2 },
-  // cellDetail: { fontSize: 9, color: '#888' }, // ⭐️ 삭제
   noRecordText: { fontSize: 14, color: '#eee', marginTop: 15 },
   hintText: { textAlign: 'center', color: '#aaa', marginVertical: 20 },
+  additionalNutrientContainerSingleLine: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 15,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0', 
+  },
+  additionalNutrientText: {
+    fontSize: 14,
+    color: '#777',
+  },
+  additionalNutrientValue: {
+    fontWeight: 'bold',
+    color: '#777',
+  },
+  simpleStatsContainer: {
+    padding: 10, 
+    alignItems: 'center',
+    width: '100%', 
+  },
+  statTextHeader: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#555',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  simpleStatRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  statLabel: { fontSize: 16, color: '#333' },
+  statValue: { fontSize: 16, fontWeight: 'bold', color: '#007bff' },
+  
+  viewRowHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 4,
+  },
+  viewRowSub: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 6,
+    paddingLeft: 20,
+  },
+  viewRowSubLast: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 8,
+    paddingBottom: 8,
+    paddingLeft: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  viewLabelSub: {
+    fontSize: 14,
+    color: '#666',
+  },
+  viewValueSub: {
+    fontSize: 14,
+    color: '#333',
+  },
 });
 
 export default StatisticsScreen;
