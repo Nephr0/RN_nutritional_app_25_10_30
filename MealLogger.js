@@ -79,7 +79,6 @@ const MealLogger = ({ session }) => {
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [adjustPurpose, setAdjustPurpose] = useState('log_meal');
-
   const [selectedLogToView, setSelectedLogToView] = useState(null);
 
 
@@ -344,6 +343,7 @@ const MealLogger = ({ session }) => {
     }
   };
 
+
   const handleSearchFood = async (query) => {
     setSearchQuery(query);
     if (query.length < 2) {
@@ -500,6 +500,7 @@ const MealLogger = ({ session }) => {
         protein: Math.round(selectedFood.protein * multiplier),
         carbs: Math.round(selectedFood.carbs * multiplier),
         fat: Math.round(selectedFood.fat * multiplier),
+        // ⭐️ 추가된 상세 영양소 저장 (반올림)
         sugar: Math.round((selectedFood.sugar || 0) * multiplier),
         fiber: Math.round((selectedFood.fiber || 0) * multiplier),
         saturated_fat: Math.round((selectedFood.saturated_fat || 0) * multiplier),
@@ -570,6 +571,7 @@ const MealLogger = ({ session }) => {
   const openCustomFoodModal = (food = null) => {
     if (food) {
       setSelectedFood({ ...food });
+      // ⭐️ 상세 영양소 필드가 없는 경우를 대비해 초기화
       setSelectedFood(prev => ({
         ...prev,
         calories: parseFloat(prev.calories) || 0,
@@ -586,6 +588,7 @@ const MealLogger = ({ session }) => {
       }));
       setAdjustPurpose('update_custom');
     } else {
+      // ⭐️ 새 메뉴 추가 시 모든 영양소 0으로 초기화
       setSelectedFood({
         id: Date.now().toString(),
         food_name: '',
@@ -603,6 +606,7 @@ const MealLogger = ({ session }) => {
   };
 
   const openDirectInputModal = () => {
+    // ⭐️ 직접 입력 시 모든 영양소 0으로 초기화
     setSelectedFood({
       id: Date.now().toString(),
       food_name: '',
@@ -711,6 +715,13 @@ const MealLogger = ({ session }) => {
           fat: food.fat,
           serving_size: food.serving_size,
           maker_name: food.maker_name,
+          sugar: food.sugar || 0,
+          fiber: food.fiber || 0,
+          saturated_fat: food.saturated_fat || 0,
+          trans_fat: food.trans_fat || 0,
+          cholesterol: food.cholesterol || 0,
+          sodium: food.sodium || 0,
+          potassium: food.potassium || 0,
         };
         const { data, error } = await supabase.from('user_favorites').insert([newFav]).select().single();
         if (error) throw error;
@@ -864,6 +875,7 @@ const MealLogger = ({ session }) => {
               >
                 <Text style={styles.statTextHeader}>상세 영양소 수정 (1인분 기준)</Text>
                 
+                {/* 칼로리 */}
                 <View style={styles.editRowMain}>
                   <Text style={styles.editLabelMain}>🔥 칼로리 (kcal)</Text>
                   <TextInput style={styles.editInput} value={String(selectedFood.calories)} onChangeText={(t) => updateSelectedFood('calories', t)} keyboardType="numeric"/>
@@ -1159,6 +1171,7 @@ const MealLogger = ({ session }) => {
             </View>
 
             <View style={{flexDirection:'row', justifyContent:'flex-start', width:'100%'}}>
+              {/* 빈 공간 */}
             </View>
           </View>
         ) : (
@@ -1281,7 +1294,6 @@ const MealLogger = ({ session }) => {
             </View>
           </View>
 
-          {/* ⭐️ 당류 및 나트륨 표시 영역 */}
           <View style={styles.additionalMacroSummarySingleLine}>
             <Text style={styles.additionalMacroText}>
               당류 <Text style={styles.additionalMacroValue}>{totalSugar}g</Text>
