@@ -1,0 +1,23 @@
+{
+  "cli": {
+    "version": ">= 7.0.0"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"  // ⭐️ 이 부분을 추가하여 AAB 대신 APK를 만듭니다.
+      }
+    },
+    "production": {
+      // production은 스토어 배포용 기본 설정 (AAB)
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

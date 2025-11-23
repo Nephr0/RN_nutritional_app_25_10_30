@@ -42,21 +42,33 @@ const ProfileScreen = ({ session, navigation }) => {
   };
 
   const handleSignOut = async () => {
-    Alert.alert(
-      '로그아웃',
-      '정말로 로그아웃 하시겠습니까?',
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '로그아웃',
-          onPress: async () => {
-            await supabase.auth.signOut();
-          },
-          style: 'destructive'
+  Alert.alert(
+    '로그아웃',
+    '정말로 로그아웃 하시겠습니까?',
+    [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '로그아웃',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+
+            // 1. Supabase 로그아웃 요청
+            const { error } = await supabase.auth.signOut();
+            
+            // 2. 에러가 있다면 예외 발생시키기
+            if (error) throw error;
+
+          } catch (error) {
+            console.error("로그아웃 실패:", error.message);
+            Alert.alert("로그아웃 실패", "네트워크 상태를 확인해주세요.\n에러: " + error.message);
+          } finally {
+          }
         },
-      ]
-    );
-  };
+      },
+    ]
+  );
+};
 
   const getActivityLevelText = (level) => {
     const levelNum = parseFloat(level);

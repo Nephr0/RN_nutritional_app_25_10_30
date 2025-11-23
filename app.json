@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "nutritional-app",
+    "name": "영양 관리",
     "slug": "nutritional-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,26 +8,35 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/adaptive-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "userInterfaceStyle": "light"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#ffffff",
+        "userInterfaceStyle": "light"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.INTERNET"
       ],
-      "usesCleartextTraffic": true 
+      "usesCleartextTraffic": true,
+      "package": "com.work.nutritionalapp"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9bda9056-5ebc-4b0c-8d1d-bbcd3759d380"
+      }
     }
   }
 }
