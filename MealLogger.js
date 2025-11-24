@@ -770,6 +770,73 @@ const MealLogger = ({ session }) => {
     return <ActivityIndicator size="large" style={styles.loading} />;
   }
   
+  const handleEditLog = () => {
+    if (!selectedLogToView) return;
+
+    // 선택된 식단 기록 데이터를 selectedFood 형식으로 변환
+    // 기존 기록에는 인분 수(multiplier)가 적용된 값이므로, multiplier를 1.0으로 설정하고 값을 그대로 사용합니다.
+    setSelectedFood({
+      id: selectedLogToView.id,
+      food_name: selectedLogToView.food_name,
+      calories: selectedLogToView.calories,
+      carbs: selectedLogToView.carbs,
+      protein: selectedLogToView.protein,
+      fat: selectedLogToView.fat,
+      sugar: selectedLogToView.sugar || 0,
+      fiber: selectedLogToView.fiber || 0,
+      saturated_fat: selectedLogToView.saturated_fat || 0,
+      trans_fat: selectedLogToView.trans_fat || 0,
+      cholesterol: selectedLogToView.cholesterol || 0,
+      sodium: selectedLogToView.sodium || 0,
+      potassium: selectedLogToView.potassium || 0,
+      serving_size: '1인분', // 기존 기록에는 없는 정보이므로 임의 설정
+      image: selectedLogToView.image_url, // 이미지 URL이 있다면 사용
+    });
+    setServingMultiplier(1.0);
+    setIsEditingNutrients(false);
+    setAdjustPurpose('log_meal'); // 식단 기록 수정 목적
+    setModalMode('edit_log'); // 모달 모드를 'edit_log'로 변경
+  };
+
+  const handleUpdateLog = async () => {
+    if (!selectedFood || !selectedLogToView) return;
+    setIsSubmitting(true);
+    try {
+      const multiplier = servingMultiplier;
+      const updatedLog = {
+        food_name: selectedFood.food_name,
+        calories: Math.round(selectedFood.calories * multiplier),
+        protein: Math.round(selectedFood.protein * multiplier),
+        carbs: Math.round(selectedFood.carbs * multiplier),
+        fat: Math.round(selectedFood.fat * multiplier),
+        sugar: Math.round((selectedFood.sugar || 0) * multiplier),
+        fiber: Math.round((selectedFood.fiber || 0) * multiplier),
+        saturated_fat: Math.round((selectedFood.saturated_fat || 0) * multiplier),
+        trans_fat: Math.round((selectedFood.trans_fat || 0) * multiplier),
+        cholesterol: Math.round((selectedFood.cholesterol || 0) * multiplier),
+        sodium: Math.round((selectedFood.sodium || 0) * multiplier),
+        potassium: Math.round((selectedFood.potassium || 0) * multiplier),
+      };
+
+      const { data, error } = await supabase
+        .from('meal_logs')
+        .update(updatedLog)
+        .eq('id', selectedLogToView.id)
+        .select();
+
+      if (error) throw error;
+
+      // 로컬 logs 상태 업데이트
+      setLogs(logs.map(log => (log.id === selectedLogToView.id ? data[0] : log)));
+      setModalVisible(false);
+      Alert.alert('수정 완료', '식단 기록이 수정되었습니다.');
+    } catch (error) {
+      Alert.alert('오류', '식단 수정에 실패했습니다: ' + error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const renderModalContent = () => {
     if (modalMode === 'my_foods') {
       return (
@@ -821,12 +888,16 @@ const MealLogger = ({ session }) => {
       );
     }
 
-    if (modalMode === 'adjust' && selectedFood) {
+    if ((modalMode === 'adjust' || modalMode === 'edit_log') && selectedFood) {
       let buttonText = '식단에 추가하기';
       let onConfirm = handleConfirmFood;
       let isSaving = isSubmitting;
 
-      if (adjustPurpose === 'save_custom') {
+      // edit_log 모드일 경우 설정 변경
+      if (modalMode === 'edit_log') {
+        buttonText = '수정 완료';
+        onConfirm = handleUpdateLog;
+      } else if (adjustPurpose === 'save_custom') {
         buttonText = '나의 메뉴 저장';
         onConfirm = handleSaveCustomFood;
         isSaving = isSavingCustomFood;
@@ -1089,7 +1160,14 @@ const MealLogger = ({ session }) => {
       const item = selectedLogToView;
       return (
         <View style={{ flex: 1 }}>
-          <Text style={styles.modalHeader}>{item.food_name}</Text>
+          {/* ⭐️ 상세 정보 모달 헤더에 수정 버튼 추가 */}
+          <View style={styles.modalHeaderContainer}>
+            <Text style={styles.modalHeader}>{item.food_name}</Text>
+            <TouchableOpacity style={styles.headerEditButton} onPress={handleEditLog}>
+              <Ionicons name="create-outline" size={24} color="#007bff" />
+            </TouchableOpacity>
+          </View>
+          
           <ScrollView style={{ flex: 1, padding: 20 }}>
             <View style={styles.simpleStatsContainer}>
               <Text style={styles.statTextHeader}>섭취 영양소 정보</Text>
@@ -1678,7 +1756,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#777',
   },
-
+  headerEditButton: {
+    position: 'absolute',
+    right: 0,
+    padding: 5,
+  },
 });
 
 export default MealLogger;
