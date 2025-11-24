@@ -11,12 +11,14 @@ import {
   FlatList,
   Modal,
   ScrollView,
+  SafeAreaView,
+  StatusBar,
+  Platform,
+  TextInput, // ⭐️ TextInput 추가
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from './supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-
 
 const AIRecommendationScreen = ({ session }) => {
   const [loadingData, setLoadingData] = useState(true);
@@ -28,6 +30,16 @@ const AIRecommendationScreen = ({ session }) => {
   const [historyList, setHistoryList] = useState([]);
   const [selectedHistory, setSelectedHistory] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
+
+  // ⭐️ 추가 정보 입력을 위한 상태 변수
+  const [preferences, setPreferences] = useState({
+    allergies: '',
+    liked: '',
+    disliked: '',
+  });
+  // ⭐️ 추가 정보 입력 모달 표시 여부
+  const [preferenceModalVisible, setPreferenceModalVisible] = useState(false);
+
 
   useFocusEffect(
     useCallback(() => {
@@ -93,6 +105,7 @@ const AIRecommendationScreen = ({ session }) => {
       setTodaySummary(summary);
 
     } catch (error) {
+      console.error('데이터 로딩 오류:', error);
     } finally {
       setLoadingData(false);
     }
@@ -111,6 +124,7 @@ const AIRecommendationScreen = ({ session }) => {
       if (error) throw error;
       setHistoryList(data || []);
     } catch (error) {
+      console.error('기록 로딩 오류:', error);
     }
   };
 
@@ -131,6 +145,7 @@ const AIRecommendationScreen = ({ session }) => {
       fetchHistory();
       
     } catch (error) {
+      console.error("저장 오류:", error);
       Alert.alert("저장 실패", `결과를 저장하지 못했습니다.\n(에러: ${error.message})`);
     }
   };
@@ -166,12 +181,18 @@ const AIRecommendationScreen = ({ session }) => {
 
 
   const getAIRecommendation = async () => {
+    // 모달이 열려있지 않은데 호출되었다면 방어 (혹시 모를 상황)
+    if (!preferenceModalVisible && !analyzing) return;
+
     if (!todaySummary || !goals) {
         Alert.alert("알림", "데이터 로딩 중입니다. 잠시만 기다려주세요.");
         return;
     }
     
     setAnalyzing(true);
+    // 분석 시작 시 키보드 내리기
+    // Keyboard.dismiss(); 
+
     try {
       const remaining = {
         calories: Math.max(0, goals.calories - todaySummary.calories),
@@ -180,22 +201,30 @@ const AIRecommendationScreen = ({ session }) => {
         fat: Math.max(0, goals.fat - todaySummary.fat),
       };
 
+      // ⭐️ 프롬프트에 사용자 입력 정보 반영
       const prompt = `
         당신은 전문 영양사입니다. 사용자의 오늘 하루 섭취 현황을 분석하고 남은 식사를 추천해주세요.
-        [사용자 목표] 칼로리: ${goals.calories}kcal, 탄수화물: ${goals.carbs}g, 단백질: ${goals.protein}g, 지방: ${goals.fat}g
-        [오늘 섭취량] 칼로리: ${todaySummary.calories}kcal, 탄수화물: ${todaySummary.carbs}g, 단백질: ${todaySummary.protein}g, 지방: ${todaySummary.fat}g
-        [부족한 양] 칼로리: 약 ${remaining.calories}kcal, 탄수화물: 약 ${remaining.carbs}g, 단백질: 약 ${remaining.protein}g, 지방: 약 ${remaining.fat}g
+        
+        [기본 정보]
+        - 사용자 목표: 칼로리 ${goals.calories}kcal, 탄수화물 ${goals.carbs}g, 단백질 ${goals.protein}g, 지방 ${goals.fat}g
+        - 오늘 섭취량: 칼로리 ${todaySummary.calories}kcal, 탄수화물 ${todaySummary.carbs}g, 단백질 ${todaySummary.protein}g, 지방 ${todaySummary.fat}g
+        - 부족한 양: 약 칼로리 ${remaining.calories}kcal, 탄수화물 ${remaining.carbs}g, 단백질 ${remaining.protein}g, 지방 ${remaining.fat}g
+
+        [사용자 선호 및 제한사항]
+        - 알레르기 정보 (반드시 제외): ${preferences.allergies || '없음'}
+        - 선호하는 음식 (가급적 포함): ${preferences.liked || '없음'}
+        - 비선호 음식 (제외): ${preferences.disliked || '없음'}
+
         요청사항:
         1. 현재 상태 분석 코멘트 (짧게)
-        2. 남은 끼니 추천 메뉴 3가지
+        2. 위 [사용자 선호 및 제한사항]을 철저히 반영하여 남은 끼니 추천 메뉴 3가지 제안
         3. 각 메뉴별 대략적인 영양 정보
         4. 한국어로 친절하게 답변 (마크다운 없이 텍스트로만)
       `;
 
-      // Supabase Edge Function 호출
       const { data, error } = await supabase.functions.invoke('gemini-ai', {
         body: {
-          type: 'recommendation', // 요청 유형
+          type: 'recommendation',
           prompt: prompt,
           modelName: "gemini-2.5-flash-lite"
         }
@@ -204,14 +233,19 @@ const AIRecommendationScreen = ({ session }) => {
       if (error) throw new Error(error.message);
       if (!data || !data.result) throw new Error("AI로부터 결과가 오지 않았습니다.");
 
-      const text = data.result; // Edge Function에서 받은 결과
+      const text = data.result;
 
       const cleanText = text.replace(/### |[*]{2}/g, '');
       setAiResult(cleanText);
       
       await saveRecommendation(cleanText);
+      
+      // ⭐️ 분석 완료 후 모달 닫기 및 입력값 초기화 (선택사항)
+      setPreferenceModalVisible(false);
+      // setPreferences({ allergies: '', liked: '', disliked: '' }); 
 
     } catch (error) {
+      console.error("AI 분석 오류:", error);
       Alert.alert("오류", "AI 분석에 실패했습니다.\n" + error.message);
     } finally {
       setAnalyzing(false);
@@ -223,6 +257,7 @@ const AIRecommendationScreen = ({ session }) => {
     setModalVisible(true);
   };
 
+  // 기록 상세 보기 모달
   const renderHistoryModal = () => (
     <Modal
       animationType="slide"
@@ -230,7 +265,7 @@ const AIRecommendationScreen = ({ session }) => {
       visible={modalVisible}
       onRequestClose={() => setModalVisible(false)}
     >
-      <SafeAreaView style={styles.modalSafeArea} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={styles.modalSafeArea} edges={['top', 'bottom']}>
         <View style={styles.modalHeader}>
           <Text style={styles.modalTitle}>
             {selectedHistory ? formatDisplayDate(selectedHistory.created_at) : ''} 결과
@@ -243,6 +278,89 @@ const AIRecommendationScreen = ({ session }) => {
           <Text style={styles.resultText}>{selectedHistory?.recommendation_text}</Text>
         </ScrollView>
       </SafeAreaView>
+    </Modal>
+  );
+
+  // ⭐️ 추가 정보 입력 모달 렌더링 함수
+  const renderPreferenceModal = () => (
+    <Modal
+      animationType="slide"
+      transparent={true} // 배경을 투명하게
+      visible={preferenceModalVisible}
+      onRequestClose={() => {
+        if (!analyzing) setPreferenceModalVisible(false);
+      }}
+    >
+      <View style={styles.prefModalContainer}>
+        <View style={styles.prefModalContent}>
+          <View style={styles.prefModalHeader}>
+            <Text style={styles.prefModalTitle}>맞춤 추천을 위한 정보</Text>
+            {!analyzing && (
+              <TouchableOpacity onPress={() => setPreferenceModalVisible(false)} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            )}
+          </View>
+          
+          <ScrollView style={{ maxHeight: 400 }}>
+            <Text style={styles.prefModalDesc}>
+              알레르기나 선호하는 식재료 정보를 입력해주시면 더 정확한 식단을 추천해드립니다. (선택사항)
+            </Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>알레르기 정보 (제외할 음식)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="예: 땅콩, 갑각류, 우유"
+                value={preferences.allergies}
+                onChangeText={(text) => setPreferences(prev => ({ ...prev, allergies: text }))}
+                editable={!analyzing}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>좋아하는 음식/식재료</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="예: 닭가슴살, 연어, 샐러드"
+                value={preferences.liked}
+                onChangeText={(text) => setPreferences(prev => ({ ...prev, liked: text }))}
+                editable={!analyzing}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>싫어하는 음식/식재료</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="예: 오이, 당근, 고수"
+                value={preferences.disliked}
+                onChangeText={(text) => setPreferences(prev => ({ ...prev, disliked: text }))}
+                editable={!analyzing}
+              />
+            </View>
+          </ScrollView>
+
+          <TouchableOpacity
+            style={[styles.analyzeButton, { marginBottom: 10, marginTop: 20 }]} // 스타일 재사용
+            onPress={getAIRecommendation}
+            disabled={analyzing}
+          >
+            {analyzing ? (
+              <>
+                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 10 }} />
+                <Text style={styles.analyzeButtonText}>AI가 분석 중입니다...</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="sparkles-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.analyzeButtonText}>분석 시작</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+        </View>
+      </View>
     </Modal>
   );
 
@@ -295,20 +413,14 @@ const AIRecommendationScreen = ({ session }) => {
 
       <TouchableOpacity
         style={styles.analyzeButton}
-        onPress={getAIRecommendation}
-        disabled={analyzing}
+        // ⭐️ 버튼 클릭 시 추천 함수 호출 대신 입력 모달 열기
+        onPress={() => setPreferenceModalVisible(true)}
+        disabled={analyzing || loadingData} // 데이터 로딩 중에도 비활성화
       >
-        {analyzing ? (
-          <>
-            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 10 }} />
-            <Text style={styles.analyzeButtonText}>AI가 분석 중입니다...</Text>
-          </>
-        ) : (
           <>
             <Ionicons name="restaurant-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.analyzeButtonText}>AI 식단 추천 받기</Text>
           </>
-        )}
       </TouchableOpacity>
 
       {aiResult ? (
@@ -324,9 +436,17 @@ const AIRecommendationScreen = ({ session }) => {
     </View>
   );
 
+  const statusBarHeight = Platform.OS === 'android' ? StatusBar.currentHeight : 0;
+
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+    <SafeAreaView
+      style={[styles.safeArea, { paddingTop: statusBarHeight }]}
+      edges={['top']}
+    >
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent={true} />
       {renderHistoryModal()}
+      {/* ⭐️ 추가 정보 입력 모달 렌더링 */}
+      {renderPreferenceModal()}
       <FlatList
         style={styles.flatList}
         data={historyList}
@@ -364,7 +484,8 @@ const AIRecommendationScreen = ({ session }) => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: 'transparent' },
+  // ... (기존 스타일 유지)
+  safeArea: { flex: 1, backgroundColor: '#f8f8f8' },
   
   flatList: { flex: 1, backgroundColor: '#f8f8f8' },
   listContentContainer: { padding: 20 }, 
@@ -460,7 +581,6 @@ const styles = StyleSheet.create({
   historyPreview: { fontSize: 14, color: '#888', marginTop: 5 },
   emptyHistoryText: { textAlign: 'center', color: '#aaa', marginTop: 10, fontStyle: 'italic', fontSize: 16 },
 
-  modalSafeArea: { flex: 1, backgroundColor: '#fff' },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -473,6 +593,63 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
   closeButton: { padding: 5 },
   modalContent: { padding: 20 },
+  modalSafeArea: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+
+  // ⭐️ 추가 정보 입력 모달 스타일
+  prefModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', // 반투명 배경
+  },
+  prefModalContent: {
+    width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  prefModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  prefModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  prefModalDesc: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 20,
+  },
+  inputGroup: {
+    marginBottom: 15,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#555',
+  },
+  input: {
+    height: 45,
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    backgroundColor: '#f9f9f9',
+    fontSize: 16,
+  },
 });
 
 export default AIRecommendationScreen;

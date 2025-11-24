@@ -10,7 +10,7 @@ import {
   Alert,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator, // ⭐️ 로딩 표시용 컴포넌트 추가
+  ActivityIndicator,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { supabase } from './supabaseClient';
@@ -138,7 +138,8 @@ const EditProfileScreen = ({ route, navigation, session, isNewUser, onProfileCre
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    // ⭐️ 수정된 부분: edges={['top']} 만 적용하여 하단 Safearea 제거
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={{ paddingBottom: 50 }}
@@ -160,9 +161,8 @@ const EditProfileScreen = ({ route, navigation, session, isNewUser, onProfileCre
             <Picker
               selectedValue={goalType}
               onValueChange={(itemValue) => setGoalType(itemValue)}
-              style={{ color: '#000000' }} // ⭐️ Picker 자체 글자색 지정
+              style={{ color: '#000000' }}
             >
-              {/* ⭐️ 각 항목별 글자색 지정 */}
               <Picker.Item label="체중 유지 / 건강" value="maintain" color="#000000" />
               <Picker.Item label="다이어트" value="diet" color="#000000" />
               <Picker.Item label="벌크업" value="bulkup" color="#000000" />
@@ -176,9 +176,8 @@ const EditProfileScreen = ({ route, navigation, session, isNewUser, onProfileCre
             <Picker
               selectedValue={gender}
               onValueChange={(itemValue) => setGender(itemValue)}
-              style={{ color: '#000000' }} // ⭐️ Picker 자체 글자색 지정
+              style={{ color: '#000000' }}
             >
-              {/* ⭐️ 각 항목별 글자색 지정 */}
               <Picker.Item label="남성" value="male" color="#000000" />
               <Picker.Item label="여성" value="female" color="#000000" />
             </Picker>
@@ -235,15 +234,14 @@ const EditProfileScreen = ({ route, navigation, session, isNewUser, onProfileCre
             <Picker
               selectedValue={activityLevel}
               onValueChange={(itemValue) => setActivityLevel(itemValue)}
-              style={{ color: '#000000' }} // ⭐️ Picker 자체 글자색 지정
+              style={{ color: '#000000' }}
             >
-              {/* ⭐️ 각 항목별 글자색 지정 */}
-              <Picker.Item label="매우 적음 (거의 앉아서 생활)" value={1.2} color="#000000" />
-              <Picker.Item label="적음 (주 1-3회 가벼운 운동)" value={1.375} color="#000000" />
-              <Picker.Item label="보통 (주 3-5회 중간 강도 운동)" value={1.55} color="#000000" />
-              <Picker.Item label="많음 (주 6-7회 고강도 운동)" value={1.725} color="#000000" />
+              <Picker.Item label="매우 적음 (운동 안함)" value={1.2} color="#000000" />
+              <Picker.Item label="적음 (주 1-3회 운동)" value={1.375} color="#000000" />
+              <Picker.Item label="보통 (주 3-5회 운동)" value={1.55} color="#000000" />
+              <Picker.Item label="많음 (주 6-7회 운동)" value={1.725} color="#000000" />
               <Picker.Item
-                label="매우 많음 (매일 격렬한 운동/육체 노동)"
+                label="매우 많음 (매일 운동/육체 노동)"
                 value={1.9}
                 color="#000000"
               />
@@ -258,7 +256,6 @@ const EditProfileScreen = ({ route, navigation, session, isNewUser, onProfileCre
             disabled={loading}
           >
             {loading ? (
-              // ⭐️ 로딩 중일 때 ActivityIndicator 표시
               <ActivityIndicator color="white" />
             ) : (
               <Text style={styles.buttonText}>
@@ -322,7 +319,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     backgroundColor: '#f9f9f9',
     fontSize: 16,
-    color: '#000000', // ⭐️ TextInput의 글자색도 명시적으로 지정
+    color: '#000000',
   },
   pickerContainer: {
     borderColor: '#ddd',
@@ -340,8 +337,8 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     borderRadius: 25,
     alignItems: 'center',
-    flexDirection: 'row', // ⭐️ 로딩 인디케이터를 위해 방향 설정
-    justifyContent: 'center', // ⭐️ 가운데 정렬
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   buttonText: {
     color: '#fff',
